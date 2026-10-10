@@ -1,0 +1,27 @@
+{
+  "name": "kuku-ai-daily-checkin",
+  "version": "1.0.0",
+  "description": "库库AI (GenFlowPro) 每日自动签到 + 对话领积分自动化脚本，基于 CDP 零依赖实现。参考 trae-daily-checkin。",
+  "type": "module",
+  "main": "src/auto-checkin.mjs",
+  "bin": {
+    "kuku-checkin": "src/auto-checkin.mjs"
+  },
+  "scripts": {
+    "checkin": "node src/auto-checkin.mjs",
+    "help": "node src/auto-checkin.mjs --help"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "kukuai",
+    "genflow",
+    "baidu",
+    "daily-checkin",
+    "cdp",
+    "electron",
+    "automation"
+  ],
+  "license": "MIT"
+}

@@ -1,0 +1,7 @@
+{
+  "kukuExe": "",
+  "debugPort": "9333",
+  "userDataDir": "",
+  "feishuWebhook": "https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxx",
+  "chatMessage": "你好，请用一句话介绍库库AI"
+}
