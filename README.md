@@ -60,6 +60,7 @@ uninstall-schedule.bat
    - 若"完成一次对话"=`去完成`：聚焦输入框 → 输入一句话 → 回车（真实创建一次对话会话）→ 按钮变为 `领取50` → 点击领取。
    - 若"每日登录"/"对话"=`领取50`：直接点击领取。
    - 领取后轮询验证按钮是否变成 `明日再来`（签到/领取是网络请求，用轮询而非固定等待）。
+   - **对话领取竞态（本轮修复）**：真实发消息后，服务端把「完成一次对话」计入并把按钮从 `去完成` 翻成 `领取50` 有延迟；脚本发消息后先 `waitForClaimable` 轮询到出现「领取」再点，避免过早判为 `not_claimable`。若等待窗口（默认 45s）内仍未翻牌，记为 `pending_claim`（今日已对话，明日可领），不误判为失败。
 
 5. 所有点击/输入都通过 CDP 的 `Input.dispatchMouseEvent` / `Input.insertText` / `Input.dispatchKeyEvent` 派发**真实事件**，与参考项目一致（前端框架对 DOM 合成事件不响应）。
 
@@ -130,6 +131,20 @@ install-schedule.bat 12:00
 3. **`status=not_logged_in`**：库库AI 未登录，需先在客户端手动登录一次（登录态会持久化，之后脚本复用）。
 4. **`status=menu_not_found` / 按钮点了没变 `明日再来`**：多为网络/接口失败或界面改版。脚本已用文本语义兜底定位；仍失败时看 `[RESULT]` 输出与 `logs\checkin.log`，并人工在库库AI 里确认签到入口。
 5. **`.bat` 乱码 / 命令报错**：所有 `.bat` 为 ASCII + CRLF（无 BOM）。含中文的 `.bat` 在中文 Windows（GBK 代码页）会被误解析，故提示语一律用英文。
+
+---
+
+## 脱机 / 纯接口领取（另见姊妹项目）
+
+本项目**保持 CDP 方式**：必须把库库AI 客户端带调试端口打开、靠模拟 UI 领取。若想要「不开客户端、纯 HTTP 接口」的脱机领取，维护在姊妹项目
+[`D:\workspace\ai-ide-daily-checkin\checkin_kuku.py`](file:///D:/workspace/ai-ide-daily-checkin/checkin_kuku.py)（Qoder / Trae / WorkBuddy / 库库 四家统一脱机签到）。
+
+脱机要点（已逆向自客户端 app.asar 的 freepoint 模块）：
+
+- 鉴权**只靠百度 passport cookie**（`BDUSS` + `STOKEN` + `gfprotpl=genflowpro`），无 Authorization / 签名 / ctoken。
+- 接口：`GET /api/genflowpro/freepoint/homenew` 取活动与 `period_no`；`POST .../rewardClaim`（body：`activity_key`、`period_id=period_no`、`task_key`）领取。公共 query 必须带 `app_id=123971023&channel=chunlei&version=1.6.9&clienttype=401`。
+- `STOKEN` 是 **genflowpro 专属**、由客户端启动时经 native 引擎与 passport 交换得到，落盘在**默认上下文** Cookie 仓（`%APPDATA%\baidugenflowpro\Network\Cookies`）；`Partitions\genflow-auth` 分区仓里的 STOKEN 常陈旧，脱机脚本以默认仓优先读取。
+- 两个每日奖励：`daily_login` 纯脱机即可领；`daily_chat` 必须**先有一次真实对话**（本项目 CDP 或手动均可）使其变 claimable，脱机脚本只负责「已可领时领取」，不会替你去对话。
 
 ---
 

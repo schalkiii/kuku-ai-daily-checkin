@@ -367,6 +367,21 @@ async function waitTaskClaimed(cdp, which, timeoutMs = 12000) {
   return false;
 }
 
+// 服务端把任务从“去完成/未领取”翻转为“领取”有延迟（对话完成后才 claimable）。
+// 轮询直到该任务按钮出现“领取”（且非“已领取/明日再来”），避免刚发完消息就去点的竞态。
+async function waitForClaimable(cdp, which, timeoutMs = 45000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await openMenu(cdp);
+    const t = await readTasks(cdp);
+    const btn = t[which] && t[which].btn;
+    if (btn && btn.includes('领取') && !btn.includes('已领取') && !btn.includes('明日再来')) return true;
+    if (btn && (btn.includes('已领取') || btn.includes('明日再来') || btn.includes('已完成'))) return false; // 已领，无需等待
+    await sleep(1500);
+  }
+  return false;
+}
+
 async function claimReward(cdp, which) {
   // 确保菜单打开，定位该行的领取按钮并真实点击
   await openMenu(cdp);
@@ -548,11 +563,12 @@ async function main() {
         info('对话任务未完成，发送一条消息以完成对话...');
         const send = await doConversation(cdp, OPTS.message);
         if (send.status === 'sent') {
-          await openMenu(cdp);
-          const claim = await claimReward(cdp, 'conv');
+          // 服务端将对话计入“完成一次对话”并把按钮翻成“领取”有延迟，先等可领再点
+          const ready = await waitForClaimable(cdp, 'conv');
+          const claim = ready ? await claimReward(cdp, 'conv') : { status: 'pending_claim' };
           result.chat = claim.status;
-          notes.push('对话:' + (claim.status === 'claimed' ? '完成并领取50' : claim.status));
-          didSomething = didSomething || claim.status === 'claimed';
+          notes.push('对话:' + (claim.status === 'claimed' ? '完成并领取50' : (claim.status === 'pending_claim' ? '已发消息,待服务端计入后明日可领' : claim.status)));
+          didSomething = didSomething || claim.status === 'claimed' || claim.status === 'pending_claim';
         } else {
           result.chat = send.status;
           notes.push('对话:发送失败(' + send.status + ')');
