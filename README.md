@@ -8,7 +8,7 @@
 - **每日登录（签到）**
 - **完成一次对话**
 
-本脚本每天自动帮你把这两项积分领到手，可推送到飞书群，也支持注册成 Windows 计划任务做到完全无人值守。
+本脚本每天自动帮你把这两项积分领到手，可推送到飞书群，也支持注册成 Windows 计划任务自动运行（CDP 需登录/锁屏会话；真正免登录的无人值守兜底见文末「脱机 / 纯接口领取」章节）。
 
 ---
 
@@ -107,7 +107,11 @@ node src/auto-checkin.mjs [选项]
 install-schedule.bat 12:00
 ```
 
+内部实际调用 `install-schedule.ps1`（纯 ASCII）注册，带 `-StartWhenAvailable`：错过时点（关机/睡眠）后开机或登录时尽快补跑一次，而非跳过当天。
+
 它注册一个名为 `KukuDailyCheckin` 的计划任务，每天定点执行 `scheduled-run.bat`：先彻底关闭库库AI → 带 `--remote-debugging-port` 重启（失败重试）→ 轮询端口就绪 → 运行 `node src\auto-checkin.mjs --force --close`，从根上绕开 Electron 单实例锁竞态。运行日志追加到 `logs\checkin.log`。
+
+> 登录模式：CDP 要把库库AI 的 Electron 界面跑起来，只能在**有桌面的登录会话**里执行，因此任务是**交互式**（当前用户、不保存 Windows 密码）。**锁屏可跑**（会话仍在），**注销则不触发**。无人登录时想领 `每日登录`，交给姊妹项目 `ai-ide-daily-checkin` 的脱机 `checkin_kuku.py`（可配成「不管是否登录都运行」）。
 
 卸载：`uninstall-schedule.bat`。
 
@@ -166,7 +170,8 @@ kuku-ai-daily-checkin/
 ├── launch-with-debug.bat         # 带调试端口启动库库AI（自动定位，双击可用）
 ├── run-once.bat                  # 一键：带端口重启 + 签到 + 对话领积分（手动，含 pause）
 ├── scheduled-run.bat             # 非交互版一键：供计划任务调用（无 pause，写日志）
-├── install-schedule.bat          # 注册每日定时任务
+├── install-schedule.bat          # 注册每日定时任务（转调 install-schedule.ps1）
+├── install-schedule.ps1          # 纯 ASCII 注册 KukuDailyCheckin：交互式 + StartWhenAvailable
 ├── uninstall-schedule.bat        # 删除定时任务
 ├── logs/                         # 定时运行日志（已 gitignore）
 ├── scripts/

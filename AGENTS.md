@@ -19,6 +19,9 @@ install-schedule.bat 12:00                :: 注册每日计划任务（KukuDail
 - `.bat` 一律 ASCII + CRLF（含中文的 bat 在 GBK 控制台会乱码/报错，提示语用英文）。
 
 ## 关键事实（已实地验证）
+- 计划任务注册走 `install-schedule.ps1`（纯 ASCII，bat 转调它）：任务 `KukuDailyCheckin` 为**交互式**
+  （当前用户、不保存密码；登录/锁屏会话可跑、注销不触发）+ `-StartWhenAvailable` 错过补跑。
+  免登录的 `每日登录` 兜底走姊妹脱机项目。
 - 两个奖励都是「两段式」：对话任务先 `去完成`→发消息→服务端**延迟**翻成 `领取50`；
   脚本发消息后用 `waitForClaimable` 轮询到「领取」再点，避免过早判 `not_claimable`（竞态修复）。
   窗口内没翻牌记 `pending_claim`（今日已对话，明日可领），不算失败。
