@@ -5,18 +5,13 @@ setlocal
 set TIMEARG=%1
 if "%TIMEARG%"=="" set TIMEARG=12:00
 set SCRIPT_DIR=%~dp0
-set TASKNAME=KukuDailyCheckin
-set BAT=%SCRIPT_DIR%scheduled-run.bat
 
-echo Registering scheduled task "%TASKNAME%" daily at %TIMEARG% ...
-echo Command: "%BAT%"
-
-schtasks /Create /F /SC DAILY /ST %TIMEARG% /TN "%TASKNAME%" /TR "\"%BAT%\""
+echo Registering scheduled task "KukuDailyCheckin" daily at %TIMEARG% ...
+echo (via install-schedule.ps1: interactive logon + StartWhenAvailable catch-up)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%install-schedule.ps1" -Time %TIMEARG%
 if errorlevel 1 (
   echo [ERROR] Failed to create the scheduled task.
   pause
   exit /b 1
 )
-echo [OK] Task created. Runs %BAT% daily at %TIMEARG%.
-echo Manage it in "Task Scheduler" (taskschd.msc) or: schtasks /Query /TN %TASKNAME% /V
 pause
