@@ -146,9 +146,9 @@ install-schedule.bat 12:00
 脱机要点（已逆向自客户端 app.asar 的 freepoint 模块）：
 
 - 鉴权**只靠百度 passport cookie**（`BDUSS` + `STOKEN` + `gfprotpl=genflowpro`），无 Authorization / 签名 / ctoken。
-- 接口：`GET /api/genflowpro/freepoint/homenew` 取活动与 `period_no`；`POST .../rewardClaim`（body：`activity_key`、`period_id=period_no`、`task_key`）领取。公共 query 必须带 `app_id=123971023&channel=chunlei&version=1.6.9&clienttype=401`。
+- 接口：`GET /api/genflowpro/freepoint/homenew` 取活动与 `period_no`；`POST .../rewardClaim`（body：`activity_key`、`period_id=period_no`、`task_key`）领取；`POST .../taskComplete`（额外带 `task_type`）为客户端任务完成信号。公共 query 必须带 `app_id=123971023&channel=chunlei&version=1.6.9&clienttype=401`。
 - `STOKEN` 是 **genflowpro 专属**、由客户端启动时经 native 引擎与 passport 交换得到，落盘在**默认上下文** Cookie 仓（`%APPDATA%\baidugenflowpro\Network\Cookies`）；`Partitions\genflow-auth` 分区仓里的 STOKEN 常陈旧，脱机脚本以默认仓优先读取。
-- 两个每日奖励：`daily_login` 纯脱机即可领；`daily_chat` 必须**先有一次真实对话**（本项目 CDP 或手动均可）使其变 claimable，脱机脚本只负责「已可领时领取」，不会替你去对话。
+- 两个每日奖励 `daily_login`、`daily_chat` 现均可纯脱机领满 100：脱机脚本先调 `POST .../taskComplete`（`task_type=CHAT`）这一客户端完成信号把 `daily_chat` 置为可领，再 `rewardClaim`（实测服务端不校验是否真的对话过）。本项目 CDP 则走真发一条消息的「真实对话」路径；不想用 taskComplete 兜底的可用本项目。
 
 ---
 
