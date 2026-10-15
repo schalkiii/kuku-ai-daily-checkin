@@ -7,7 +7,7 @@ set PORT=9333
 set SCRIPT_DIR=%~dp0
 set LOGDIR=%SCRIPT_DIR%logs
 if not exist "%LOGDIR%" mkdir "%LOGDIR%"
-set LOGFILE=%LOGDIR%checkin.log
+set LOGFILE=%LOGDIR%\checkin.log
 
 set NODE=node
 for /f "delims=" %%i in ('where node') do if not defined NODEABS set NODEABS=%%i
