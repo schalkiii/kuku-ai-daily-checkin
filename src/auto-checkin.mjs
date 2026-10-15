@@ -5,9 +5,11 @@
  * 参考 https://github.com/schalkiii/trae-daily-checkin 的实现思路，
  * 针对本地库库AI PC 客户端（Electron）通过 Chrome DevTools Protocol (CDP) 操控 DOM。
  *
- * 两个奖励（每个 +50 积分），均为“两段式”：
- *   1) 每日登录（签到）：   按钮 领取50  -> 点击 -> 明日再来
- *   2) 完成一次对话：       按钮 去完成  -> 在输入框发消息并回车 -> 领取50 -> 点击 -> 明日再来
+ * 活动（2026-10 改版后）：账户菜单内嵌 kuku.baidu.com/comps/view 活动页（“金秋厚礼”）：
+ *   1) 每日签到：连签 7 天解锁网盘 SVIP（点 img.kuku-sign-in__btn）
+ *   2) 与库库AI对话 ×3：积分 +10/次 + 抽奖机会（在主页输入框真实发消息）
+ *   3) 邀请朋友 / 浏览知识广场：邀请需他人、浏览为可选，本脚本专注 1、2。
+ * 旧 freepoint(daily_login/daily_chat 各 +50) 已下线（homenew 现返回空 activities）。
  *
  * 零第三方依赖，需 Node.js >= 18（内置 fetch 与全局 WebSocket）。
  */
@@ -65,6 +67,7 @@ const OPTS = {
   noPush: !!argv['no-push'],
   skipChat: !!argv['skip-chat'],
   skipCheckin: !!argv['skip-checkin'],
+  chatTimes: Number(pick('chat-times', 'KUKUCHECKIN_CHAT_TIMES', 'chatTimes', '3')),
   message: pick('message', 'KUKUCHECKIN_CHAT_MESSAGE', 'chatMessage', '你好，请用一句话介绍库库AI'),
 };
 
@@ -335,64 +338,79 @@ true;
 // 业务动作
 // ----------------------------------------------------------------------------
 
-async function openMenu(cdp) {
-  if (await cdp.eval('window.__kuku.menuOpen()')) return true;
+async function clickAvatar(cdp) {
   const av = await cdp.eval('window.__kuku.avatar()');
   if (!av) throw new Error('未找到左下角账户头像入口');
   await cdp.clickAt(av.x, av.y);
-  for (let i = 0; i < 20; i++) {
-    await sleep(400);
-    if (await cdp.eval('window.__kuku.menuOpen()')) return true;
-  }
-  return false;
+  await sleep(1200);
 }
 
-async function closeMenu(cdp) {
-  if (!(await cdp.eval('window.__kuku.menuOpen()'))) return;
-  // 点击空白区域（右上）收起菜单
-  await cdp.clickAt(700, 150);
+async function closeMenu(cdp) { await dismissOverlay(cdp); }
+
+async function dismissOverlay(cdp) {
+  try {
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 });
+  } catch { /* ignore */ }
   await sleep(400);
 }
 
-async function readTasks(cdp) { return await cdp.eval('window.__kuku.tasks()'); }
-
-async function waitTaskClaimed(cdp, which, timeoutMs = 12000) {
+// 活动是内嵌在账户弹窗里的 kuku.baidu.com/comps/view/<id> iframe（独立 CDP target）。
+async function findCompsTarget(port, timeoutMs = 12000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const t = await readTasks(cdp);
-    const btn = t[which] && t[which].btn;
-    if (btn && (btn.includes('明日再来') || btn.includes('已领取') || btn.includes('已完成'))) return true;
-    await sleep(700);
+    try {
+      const list = await httpJson(`http://127.0.0.1:${port}/json`);
+      const fr = list.find((t) => /comps\/view/.test(t.url || ''));
+      if (fr && fr.webSocketDebuggerUrl) return fr;
+    } catch { /* ignore */ }
+    await sleep(500);
   }
-  return false;
+  return null;
 }
 
-// 服务端把任务从“去完成/未领取”翻转为“领取”有延迟（对话完成后才 claimable）。
-// 轮询直到该任务按钮出现“领取”（且非“已领取/明日再来”），避免刚发完消息就去点的竞态。
-async function waitForClaimable(cdp, which, timeoutMs = 45000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await openMenu(cdp);
-    const t = await readTasks(cdp);
-    const btn = t[which] && t[which].btn;
-    if (btn && btn.includes('领取') && !btn.includes('已领取') && !btn.includes('明日再来')) return true;
-    if (btn && (btn.includes('已领取') || btn.includes('明日再来') || btn.includes('已完成'))) return false; // 已领，无需等待
+async function attachComps(port, timeoutMs = 8000) {
+  const fr = await findCompsTarget(port, timeoutMs);
+  if (!fr) return null;
+  const ac = new CDP(fr.webSocketDebuggerUrl);
+  await ac.connect();
+  await ac.send('Runtime.enable');
+  await ac.send('Page.enable');
+  return ac;
+}
+
+// 每日签到：点击 comps 活动内的签到按钮（img.kuku-sign-in__btn）；今天已签则 day 带 --todaySigned。
+async function doSignIn(ac) {
+  for (let i = 0; i < 24; i++) {
+    const st = await ac.eval(String.raw`(() => {
+      const b = document.querySelector('.kuku-sign-in__btn');
+      const d = document.querySelector('.kuku-sign-in__day');
+      const r = b && b.getBoundingClientRect();
+      return { hasBtn: !!b, signed: !!(d && /todaySigned/.test(d.className)),
+        x: r ? Math.round(r.x + r.width / 2) : 0, y: r ? Math.round(r.y + r.height / 2) : 0 };
+    })()`);
+    if (st && st.signed) return 'already_signed';
+    if (st && st.hasBtn) {
+      await ac.clickAt(st.x, st.y);
+      await sleep(1600);
+      const now = await ac.eval(String.raw`(() => { const d = document.querySelector('.kuku-sign-in__day'); return !!(d && /todaySigned/.test(d.className)); })()`);
+      return now ? 'signed' : 'clicked';
+    }
+    await sleep(600);
+  }
+  return 'no_sign_control';
+}
+
+// 对话任务：在主页输入框真实发 N 条消息（活动按“与库库AI对话 N/3”计数，积分+10/次）。
+async function doChats(cdp, n, message) {
+  let sent = 0;
+  for (let k = 0; k < n; k++) {
+    const r = await doConversation(cdp, message);
+    if (r.status !== 'sent') break;
+    sent++;
     await sleep(1500);
   }
-  return false;
-}
-
-async function claimReward(cdp, which) {
-  // 确保菜单打开，定位该行的领取按钮并真实点击
-  await openMenu(cdp);
-  const t = await readTasks(cdp);
-  const item = t[which];
-  if (!item) return { status: 'not_found' };
-  if (!item.btn.includes('领取')) return { status: 'not_claimable', btn: item.btn };
-  const c = { x: Math.round(item.r[0] + item.r[2] / 2), y: Math.round(item.r[1] + item.r[3] / 2) };
-  await cdp.clickAt(c.x, c.y);
-  const claimed = await waitTaskClaimed(cdp, which);
-  return { status: claimed ? 'claimed' : 'unknown', before: item.btn };
+  return sent;
 }
 
 // 完成一次对话：聚焦输入框 -> 输入消息 -> 回车 -> 等待会话创建
@@ -525,114 +543,79 @@ async function main() {
 
   const result = {
     status: 'unknown',
-    checkin: null,   // 每日登录（签到）
-    chat: null,      // 完成一次对话
+    checkin: null,   // 每日签到（连签送 SVIP）
+    chat: null,      // 与库库AI对话（积分+10/次）
     detail: '',
     time: new Date().toLocaleString('zh-CN', { hour12: false }),
   };
 
-  let cdp;
+  let cdp, ac;
   try {
     cdp = await ensureConnection();
 
-    // 未登录检测
-    await openMenu(cdp);
+    // 点左下角头像 -> 弹出账户菜单/活动弹窗（内嵌 comps 活动 iframe）
+    await clickAvatar(cdp);
     if (await cdp.eval('window.__kuku.loginPrompt()')) {
       result.status = 'not_logged_in';
       result.detail = '库库AI 未登录，需先手动登录后再运行';
-      await finish(cdp, result);
+      await finish(cdp, result, ac);
       return;
     }
-    let t = await readTasks(cdp);
-    if (!t.login && !t.conv) {
-      result.status = 'menu_not_found';
-      result.detail = '未能打开账户菜单或找到签到/对话任务（可能界面改版，需人工确认）';
-      await finish(cdp, result);
+
+    // 附着活动页（kuku.baidu.com/comps/view）
+    ac = await attachComps(OPTS.port);
+    if (!ac) {
+      result.status = 'activity_not_found';
+      result.detail = '未能打开/附着活动页(kuku.baidu.com/comps/view)，入口或界面可能再次改版，需人工确认';
+      await finish(cdp, result, ac);
       return;
+    }
+
+    // ---- 每日签到 ----
+    if (!OPTS.skipCheckin) result.checkin = await doSignIn(ac);
+
+    // ---- 对话任务（发 N 条真实消息）----
+    if (!OPTS.skipChat) {
+      if (ac) { ac.close(); ac = null; }
+      await dismissOverlay(cdp);           // 收起活动弹窗，回到主工作台输入框
+      const sent = await doChats(cdp, OPTS.chatTimes, OPTS.message);
+      result.chat = sent > 0 ? ('sent_' + sent) : 'none';
     }
 
     const notes = [];
-    let didSomething = false;
-
-    // ---- 对话任务（需在输入框操作，先处理，最后领取）----
-    if (!OPTS.skipChat) {
-      t = await readTasks(cdp);
-      const conv = t.conv;
-      if (!conv) notes.push('对话:任务缺失');
-      else if (conv.btn.includes('去完成')) {
-        info('对话任务未完成，发送一条消息以完成对话...');
-        const send = await doConversation(cdp, OPTS.message);
-        if (send.status === 'sent') {
-          // 服务端将对话计入“完成一次对话”并把按钮翻成“领取”有延迟，先等可领再点
-          const ready = await waitForClaimable(cdp, 'conv');
-          const claim = ready ? await claimReward(cdp, 'conv') : { status: 'pending_claim' };
-          result.chat = claim.status;
-          notes.push('对话:' + (claim.status === 'claimed' ? '完成并领取50' : (claim.status === 'pending_claim' ? '已发消息,待服务端计入后明日可领' : claim.status)));
-          didSomething = didSomething || claim.status === 'claimed' || claim.status === 'pending_claim';
-        } else {
-          result.chat = send.status;
-          notes.push('对话:发送失败(' + send.status + ')');
-        }
-      } else if (conv.btn.includes('领取')) {
-        const claim = await claimReward(cdp, 'conv');
-        result.chat = claim.status;
-        notes.push('对话:' + (claim.status === 'claimed' ? '领取50' : claim.status));
-        didSomething = didSomething || claim.status === 'claimed';
-      } else {
-        result.chat = 'already';
-        notes.push('对话:今日已完成并领取');
-      }
-    } else notes.push('对话:已跳过');
-
-    // ---- 每日登录（签到）----
-    if (!OPTS.skipCheckin) {
-      await openMenu(cdp);
-      t = await readTasks(cdp);
-      const login = t.login;
-      if (!login) notes.push('签到:任务缺失');
-      else if (login.btn.includes('领取')) {
-        const claim = await claimReward(cdp, 'login');
-        result.checkin = claim.status;
-        notes.push('签到:' + (claim.status === 'claimed' ? '领取50' : claim.status));
-        didSomething = didSomething || claim.status === 'claimed';
-      } else if (login.btn.includes('明日再来') || login.btn.includes('已')) {
-        result.checkin = 'already';
-        notes.push('签到:今日已领');
-      } else {
-        result.checkin = 'unknown';
-        notes.push('签到:按钮状态未知(' + login.btn + ')');
-      }
-    } else notes.push('签到:已跳过');
-
+    if (!OPTS.skipCheckin) notes.push('签到:' + result.checkin);
+    if (!OPTS.skipChat) notes.push('对话:' + result.chat);
     result.detail = notes.join('；');
-    if (result.status === 'unknown') {
-      const anyFail = [result.checkin, result.chat].some((v) => v && ['unknown', 'not_found', 'not_claimable', 'input_not_found', 'type_failed', 'sent'].includes(v));
-      const allAlready = (OPTS.skipCheckin || result.checkin === 'already') && (OPTS.skipChat || result.chat === 'already');
-      if (allAlready && !didSomething) { result.status = 'already_done'; }
-      else if (didSomething && !anyFail) { result.status = 'success'; }
-      else if (didSomething) { result.status = 'partial'; }
-      else { result.status = anyFail ? 'failed' : 'unknown'; }
+
+    if (!OPTS.skipCheckin) {
+      if (result.checkin === 'signed') result.status = 'success';
+      else if (result.checkin === 'already_signed') result.status = 'already_done';
+      else result.status = 'failed';
+    } else {
+      result.status = (!OPTS.skipChat && String(result.chat).startsWith('sent')) ? 'success' : 'skipped';
     }
-    await finish(cdp, result);
+    await finish(cdp, result, ac);
   } catch (e) {
     result.status = 'failed';
     result.detail = (result.detail ? result.detail + '；' : '') + '错误: ' + e.message;
     console.error('[ERROR]', e.stack || e.message);
+    if (ac) ac.close();
     if (cdp) cdp.close();
     await report(result);
     process.exit(1);
   }
 }
 
-async function finish(cdp, result) {
-  try { if (cdp) await closeMenu(cdp); } catch { /* ignore */ }
+async function finish(cdp, result, ac) {
+  try { if (ac) ac.close(); } catch { /* ignore */ }
+  try { if (cdp) await dismissOverlay(cdp); } catch { /* ignore */ }
   if (cdp) cdp.close();
   await report(result);
   if (OPTS.close) {
     info('--close：签到完成后关闭库库AI');
     await closeKuku(15000);
   }
-  const code = result.status === 'success' || result.status === 'partial' ? 0
+  const code = (result.status === 'success' || result.status === 'partial' || result.status === 'skipped') ? 0
     : result.status === 'already_done' ? 2
     : 1;
   process.exit(code);
@@ -658,7 +641,8 @@ function printHelp() {
   --force                      库库AI 在运行但无调试端口时，强制关闭并带端口重启
   --profile <path>             使用独立 user-data-dir 启动（隔离测试，不影响主账号）
   --close                      签到完成后关闭库库AI 进程（适合无人值守）
-  --message <text>             对话任务发送的消息内容（默认："你好，请用一句话介绍库库AI"）
+  --message <text>             对话任务发送的消息内容（默认：“你好，请用一句话介绍库库AI”）
+  --chat-times <n>             对话任务发送消息的条数（活动计“与库库AI对话 N/3”，默认 3）
   --skip-chat                  只做签到，不做对话
   --skip-checkin               只做对话，不做签到
   --feishu <url>               签到结果推送飞书群机器人 webhook（也可 config.json / 环境变量）
