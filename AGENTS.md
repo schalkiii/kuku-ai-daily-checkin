@@ -2,7 +2,7 @@
 
 ## 定位
 本项目用 **CDP（Chrome DevTools Protocol）模拟 UI**，为库库AI PC 客户端（GenFlowPro，Electron）
-自动完成 2026-10 改版后的「金秋厚礼」活动：每日签到(连签7天送网盘SVIP) + 与库库AI对话×3(积分+10/次)。零第三方依赖，需 Node ≥ 18。
+自动完成 2026-10 改版后的「金秋厚礼」活动：每日签到(连签7天送网盘SVIP) + 与库库AI对话×3(积分+10/次) + 浏览知识广场 + 抽完所有抽奖机会。零第三方依赖，需 Node ≥ 18。
 
 ## 怎么跑
 ```bat
@@ -25,6 +25,8 @@ install-schedule.bat 12:00                :: 注册每日计划任务（KukuDail
 - 活动是账户菜单点「签到领奖」打开的内嵌 iframe `kuku.baidu.com/comps/view/<id>`（独立 CDP target，按 comps/view 匹配附着）。
 - 每日签到：点活动内 `img.kuku-sign-in__btn`；已签判定 = 页内存在 `.kuku-sign-in__day--todaySigned`（实测连签数会 +1）。
 - 与库库AI对话：**必须先在活动页点该任务卡的「去完成」**(会关闭活动跳到新任务)→再在输入框发消息→才计入 `N/3`；平时直接聊天不归属活动（实测 0/3→1/3）。默认 prompt 用「回复我【1】 别说别的别思考」省 token。
+- 浏览知识广场：点该任务卡「去完成」→跳 `#/workbench/knowledge-square`（每日1次，+1 抽奖机会）。
+- 抽奖：`.kuku-btn-box .kuku-btn`（先 scrollIntoView）点一次转一次→结果弹窗 `.kuku-reward-pop` 出现后点 `.kuku-reward-btn`（“开心收下”，图片按钮无文本）→循环到“剩余0次”；按 popped 计数。
 
 ## 与脱机方案的分工（重要）
 - **本项目 = CDP**：需要打开客户端、靠 UI 领取，是库库签到的可靠主路径。
