@@ -345,6 +345,17 @@ async function clickAvatar(cdp) {
   await sleep(1200);
 }
 
+// 账户菜单里的“签到领奖”行会打开 comps 活动页（注意“每日领奖”是积分明细，别点错）。
+async function clickActivityEntry(cdp) {
+  const c = await cdp.eval(String.raw`(() => {
+    const n=(s)=>(s||'').replace(/\s+/g,' ').trim();
+    const el=[...document.querySelectorAll('button,a,[role="button"],div,span,li')].filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&r.height<80&&/签到领奖|签到领取|立即签到|每日签到/.test(n(e.textContent));}).sort((a,b)=>a.getBoundingClientRect().height-b.getBoundingClientRect().height)[0];
+    if(!el)return null;const r=el.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};
+  })()`);
+  if (c) { await cdp.clickAt(c.x, c.y); await sleep(1500); }
+  return !!c;
+}
+
 async function closeMenu(cdp) { await dismissOverlay(cdp); }
 
 async function dismissOverlay(cdp) {
@@ -379,22 +390,25 @@ async function attachComps(port, timeoutMs = 8000) {
   return ac;
 }
 
-// 每日签到：点击 comps 活动内的签到按钮（img.kuku-sign-in__btn）；今天已签则 day 带 --todaySigned。
+// 每日签到：点击 comps 活动内的签到按钮（img.kuku-sign-in__btn）；今天已签则页内存在 .kuku-sign-in__day--todaySigned。
 async function doSignIn(ac) {
+  const probe = String.raw`(() => {
+    const b = document.querySelector('.kuku-sign-in__btn');
+    const r = b && b.getBoundingClientRect();
+    return { signed: !!document.querySelector('.kuku-sign-in__day--todaySigned'),
+      hasBtn: !!b, x: r ? Math.round(r.x + r.width / 2) : 0, y: r ? Math.round(r.y + r.height / 2) : 0 };
+  })()`;
+  const isSigned = () => ac.eval(`!!document.querySelector('.kuku-sign-in__day--todaySigned')`);
   for (let i = 0; i < 24; i++) {
-    const st = await ac.eval(String.raw`(() => {
-      const b = document.querySelector('.kuku-sign-in__btn');
-      const d = document.querySelector('.kuku-sign-in__day');
-      const r = b && b.getBoundingClientRect();
-      return { hasBtn: !!b, signed: !!(d && /todaySigned/.test(d.className)),
-        x: r ? Math.round(r.x + r.width / 2) : 0, y: r ? Math.round(r.y + r.height / 2) : 0 };
-    })()`);
+    const st = await ac.eval(probe);
     if (st && st.signed) return 'already_signed';
     if (st && st.hasBtn) {
       await ac.clickAt(st.x, st.y);
-      await sleep(1600);
-      const now = await ac.eval(String.raw`(() => { const d = document.querySelector('.kuku-sign-in__day'); return !!(d && /todaySigned/.test(d.className)); })()`);
-      return now ? 'signed' : 'clicked';
+      for (let j = 0; j < 10; j++) {
+        await sleep(800);
+        if (await isSigned()) return 'signed';
+      }
+      return 'clicked_unverified';
     }
     await sleep(600);
   }
@@ -553,7 +567,7 @@ async function main() {
   try {
     cdp = await ensureConnection();
 
-    // 点左下角头像 -> 弹出账户菜单/活动弹窗（内嵌 comps 活动 iframe）
+    // 点左下角头像 -> 弹出账户菜单；再点“签到领奖”行打开 comps 活动页
     await clickAvatar(cdp);
     if (await cdp.eval('window.__kuku.loginPrompt()')) {
       result.status = 'not_logged_in';
@@ -561,6 +575,7 @@ async function main() {
       await finish(cdp, result, ac);
       return;
     }
+    await clickActivityEntry(cdp);
 
     // 附着活动页（kuku.baidu.com/comps/view）
     ac = await attachComps(OPTS.port);
