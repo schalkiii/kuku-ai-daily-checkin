@@ -5,10 +5,11 @@
  * 参考 https://github.com/schalkiii/trae-daily-checkin 的实现思路，
  * 针对本地库库AI PC 客户端（Electron）通过 Chrome DevTools Protocol (CDP) 操控 DOM。
  *
- * 活动（2026-10 改版后）：账户菜单内嵌 kuku.baidu.com/comps/view 活动页（“金秋厚礼”）：
+ * 活动（2026-10 改版后）：账户菜单点「签到领奖」打开 kuku.baidu.com/comps/view 活动页（“金秋厚礼”），本脚本自动做满：
  *   1) 每日签到：连签 7 天解锁网盘 SVIP（点 img.kuku-sign-in__btn）
- *   2) 与库库AI对话 ×3：积分 +10/次 + 抽奖机会（在主页输入框真实发消息）
- *   3) 邀请朋友 / 浏览知识广场：邀请需他人、浏览为可选，本脚本专注 1、2。
+ *   2) 与库库AI对话 ×3：先点任务卡「去完成」再发消息才计入（积分 +10/次 + 抽奖机会）
+ *   3) 浏览知识广场：点「去完成」跳知识广场（每日1次，+1 抽奖机会）
+ *   4) 抽奖：点抽奖按钮转一次→点“开心收下”→循环到剩余0次（邀请需他人，不自动）
  * 旧 freepoint(daily_login/daily_chat 各 +50) 已下线（homenew 现返回空 activities）。
  *
  * 零第三方依赖，需 Node.js >= 18（内置 fetch 与全局 WebSocket）。

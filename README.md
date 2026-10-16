@@ -91,7 +91,7 @@ node src/auto-checkin.mjs [选项]
 | --- | --- |
 | 0 | 成功（含部分成功，如只领到一项） |
 | 1 | 失败/异常（未登录、找不到按钮、领取校验不通过等） |
-| 2 | 今日签到与对话均已领取，无需重复操作 |
+| 2 | 今日签到已领取（无需重复；对话/浏览/抽奖按当日情况顺带处理） |
 
 ---
 
@@ -107,7 +107,7 @@ install-schedule.bat 12:00
 
 它注册一个名为 `KukuDailyCheckin` 的计划任务，每天定点执行 `scheduled-run.bat`：先彻底关闭库库AI → 带 `--remote-debugging-port` 重启（失败重试）→ 轮询端口就绪 → 运行 `node src\auto-checkin.mjs --force --close`，从根上绕开 Electron 单实例锁竞态。运行日志追加到 `logs\checkin.log`。
 
-> 登录模式：CDP 要把库库AI 的 Electron 界面跑起来，只能在**有桌面的登录会话**里执行，因此任务是**交互式**（当前用户、不保存 Windows 密码）。**锁屏可跑**（会话仍在），**注销则不触发**。无人登录时想领 `每日登录`，交给姊妹项目 `ai-ide-daily-checkin` 的脱机 `checkin_kuku.py`（可配成「不管是否登录都运行」）。
+> 登录模式：CDP 要把库库AI 的 Electron 界面跑起来，只能在**有桌面的登录会话**里执行，因此任务是**交互式**（当前用户、不保存 Windows 密码）。**锁屏可跑**（会话仍在），**注销则不触发**。注：库库活动改版后**已无法脱机**（新活动需 App 注入的 jsToken），所以无人登录时库库领不到；姊妹项目 `ai-ide-daily-checkin` 的脱机方案对库库已失效，仅 Qoder / Trae / WorkBuddy 可无人登录运行。
 
 卸载：`uninstall-schedule.bat`。
 
@@ -129,30 +129,26 @@ install-schedule.bat 12:00
 1. **端口 9222 打不开 / 连到别的应用**：9222 常被其它 Electron 应用（如 Lenovo Vantage）占用。本脚本默认用 **9333**，且会校验端口是否属于库库AI（User-Agent 含 `KuKuGenFlow`），被占用时自动改用备用端口。
 2. **`--force` 等待调试端口超时**：Electron 单实例锁竞态。标准解法是先彻底关闭再带端口重启——`run-once.bat` / `scheduled-run.bat` 已内置该流程。
 3. **`status=not_logged_in`**：库库AI 未登录，需先在客户端手动登录一次（登录态会持久化，之后脚本复用）。
-4. **`status=menu_not_found` / 按钮点了没变 `明日再来`**：多为网络/接口失败或界面改版。脚本已用文本语义兜底定位；仍失败时看 `[RESULT]` 输出与 `logs\checkin.log`，并人工在库库AI 里确认签到入口。
+4. **`status=activity_not_found` / `checkin=no_sign_control`**：多为界面改版或活动入口变化（活动是 `kuku.baidu.com/comps/view` iframe，需点账户菜单「签到领奖」打开）。看 `[RESULT]` 输出与 `logs\checkin.log`，并人工在库库AI 里确认活动页能否打开。
 5. **`.bat` 乱码 / 命令报错**：所有 `.bat` 为 ASCII + CRLF（无 BOM）。含中文的 `.bat` 在中文 Windows（GBK 代码页）会被误解析，故提示语一律用英文。
 
 ---
 
 ## 脱机 / 纯接口领取（另见姊妹项目）
 
-本项目**保持 CDP 方式**：必须把库库AI 客户端带调试端口打开、靠模拟 UI 领取。若想要「不开客户端、纯 HTTP 接口」的脱机领取，维护在姊妹项目
-[`D:\workspace\ai-ide-daily-checkin\checkin_kuku.py`](file:///D:/workspace/ai-ide-daily-checkin/checkin_kuku.py)（Qoder / Trae / WorkBuddy / 库库 四家统一脱机签到）。
+本项目**保持 CDP 方式**。⚠️ **2026-10-15 库库活动改版后，库库已无法脱机领取**：旧 `freepoint` 接口（`homenew`/`rewardClaim`/`taskComplete`，纯 cookie 无签名）已下线——`homenew` 现返回空 `activities`；新「金秋厚礼」活动的接口都带一个 App 注入的 `window.jsToken`（128位 hex，cookie/URL 里都没有），**脱机无法生成**，只能在真实页面里点。
 
-脱机要点（已逆向自客户端 app.asar 的 freepoint 模块）：
-
-- 鉴权**只靠百度 passport cookie**（`BDUSS` + `STOKEN` + `gfprotpl=genflowpro`），无 Authorization / 签名 / ctoken。
-- 接口：`GET /api/genflowpro/freepoint/homenew` 取活动与 `period_no`；`POST .../rewardClaim`（body：`activity_key`、`period_id=period_no`、`task_key`）领取；`POST .../taskComplete`（额外带 `task_type`）为客户端任务完成信号。公共 query 必须带 `app_id=123971023&channel=chunlei&version=1.6.9&clienttype=401`。
-- `STOKEN` 是 **genflowpro 专属**、由客户端启动时经 native 引擎与 passport 交换得到，落盘在**默认上下文** Cookie 仓（`%APPDATA%\baidugenflowpro\Network\Cookies`）；`Partitions\genflow-auth` 分区仓里的 STOKEN 常陈旧，脱机脚本以默认仓优先读取。
-- 两个每日奖励 `daily_login`、`daily_chat` 现均可纯脱机领满 100：脱机脚本先调 `POST .../taskComplete`（`task_type=CHAT`）这一客户端完成信号把 `daily_chat` 置为可领，再 `rewardClaim`（实测服务端不校验是否真的对话过）。本项目 CDP 则走真发一条消息的「真实对话」路径；不想用 taskComplete 兜底的可用本项目。
+因此：
+- 库库的签到/对话/浏览/抽奖**全部走本项目 CDP**。
+- 姊妹项目 [`ai-ide-daily-checkin`](file:///D:/workspace/ai-ide-daily-checkin) 的 `checkin_kuku.py` 对库库现在是**安全 no-op**（领不到但不报错）；该项目的脱机方案仍适用于 Qoder / Trae / WorkBuddy 三家。
 
 ---
 
 ## 安全与限制
 
 - 调试端口只监听 `127.0.0.1`，本机安全；但本机任意进程都能连接，公用电脑不建议长期开启。
-- CSS 类名 / 菜单文案可能随库库AI 更新变化，脚本用"文本语义（每日登录 / 完成一次对话 / 领取 / 明日再来）+ 位置"多重定位抗改版。
-- 对话任务会真实发送一条消息给 AI（可能触发一次智能体任务）。可用 `--message` 自定义内容，或 `--skip-chat` 跳过。
+- CSS 类名 / 菜单文案可能随库库AI 更新变化，脚本用"活动 iframe + 类名（`kuku-sign-in__btn` / `kuku-task-card__btn` / `kuku-reward-btn`）+ 文本语义"多重定位抗改版；但活动是季节性的，改版后可能失效，看日志状态人工确认。
+- 对话任务会真实发消息（默认 3 次，`--chat-times` 可调，`--skip-chat` 跳过）。
 
 ---
 
