@@ -67,7 +67,7 @@ const OPTS = {
   noPush: !!argv['no-push'],
   skipChat: !!argv['skip-chat'],
   skipCheckin: !!argv['skip-checkin'],
-  chatTimes: Number(pick('chat-times', 'KUKUCHECKIN_CHAT_TIMES', 'chatTimes', '3')),
+  chatTimes: Number(pick('chat-times', 'KUKUCHECKIN_CHAT_TIMES', 'chatTimes', '0')),  // 0=不做对话（实测普通发消息不计入活动 0/3，待补“去对话”归因流程）
   message: pick('message', 'KUKUCHECKIN_CHAT_MESSAGE', 'chatMessage', '你好，请用一句话介绍库库AI'),
 };
 
