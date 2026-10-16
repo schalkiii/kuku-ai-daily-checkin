@@ -2,7 +2,7 @@
 
 ## 定位
 本项目用 **CDP（Chrome DevTools Protocol）模拟 UI**，为库库AI PC 客户端（GenFlowPro，Electron）
-自动完成两项每日积分：`每日登录`(+50) 与 `完成一次对话`(+50)。零第三方依赖，需 Node ≥ 18。
+自动完成 2026-10 改版后的「金秋厚礼」活动：每日签到(连签7天送网盘SVIP) + 与库库AI对话×3(积分+10/次)。零第三方依赖，需 Node ≥ 18。
 
 ## 怎么跑
 ```bat
@@ -22,17 +22,14 @@ install-schedule.bat 12:00                :: 注册每日计划任务（KukuDail
 - 计划任务注册走 `install-schedule.ps1`（纯 ASCII，bat 转调它）：任务 `KukuDailyCheckin` 为**交互式**
   （当前用户、不保存密码；登录/锁屏会话可跑、注销不触发）+ `-StartWhenAvailable` 错过补跑。
   免登录的 `每日登录` 兜底走姊妹脱机项目。
-- 两个奖励都是「两段式」：对话任务先 `去完成`→发消息→服务端**延迟**翻成 `领取50`；
-  脚本发消息后用 `waitForClaimable` 轮询到「领取」再点，避免过早判 `not_claimable`（竞态修复）。
-  窗口内没翻牌记 `pending_claim`（今日已对话，明日可领），不算失败。
-- 领取是网络请求，一律用轮询验证按钮变 `明日再来`，不用固定 sleep。
+- 活动是账户菜单点「签到领奖」打开的内嵌 iframe `kuku.baidu.com/comps/view/<id>`（独立 CDP target，按 comps/view 匹配附着）。
+- 每日签到：点活动内 `img.kuku-sign-in__btn`；已签判定 = 页内存在 `.kuku-sign-in__day--todaySigned`（实测连签数会 +1）。
+- 与库库AI对话：**必须先在活动页点该任务卡的「去完成」**(会关闭活动跳到新任务)→再在输入框发消息→才计入 `N/3`；平时直接聊天不归属活动（实测 0/3→1/3）。默认 prompt 用「回复我【1】 别说别的别思考」省 token。
 
 ## 与脱机方案的分工（重要）
 - **本项目 = CDP**：需要打开客户端、靠 UI 领取，是库库签到的可靠主路径。
-- **纯接口脱机领取在姊妹项目**：`D:\workspace\ai-ide-daily-checkin\checkin_kuku.py`
-  （读 `%APPDATA%\baidugenflowpro\Network\Cookies` 的 BDUSS+genflowpro STOKEN，
-  直调 `freepoint/homenew` + `/rewardClaim`；鉴权仅靠 Cookie，无签名）。
-  改脱机侧代码需在那个项目里做。
+- **姊妹项目 `ai-ide-daily-checkin\checkin_kuku.py` 的脱机方案已失效**：旧 `freepoint`(纯cookie) 于 2026-10 下线；
+  新活动的接口都带 App 注入的 `window.jsToken`，脱机无法生成 → 库库只能走本项目 CDP。
 
 ## 安全红线
 - 只读登录态、不打印 cookie/token 明文、不改 refresh token。调试端口只监听 127.0.0.1。
