@@ -67,8 +67,8 @@ const OPTS = {
   noPush: !!argv['no-push'],
   skipChat: !!argv['skip-chat'],
   skipCheckin: !!argv['skip-checkin'],
-  chatTimes: Number(pick('chat-times', 'KUKUCHECKIN_CHAT_TIMES', 'chatTimes', '0')),  // 0=不做对话（实测普通发消息不计入活动 0/3，待补“去对话”归因流程）
-  message: pick('message', 'KUKUCHECKIN_CHAT_MESSAGE', 'chatMessage', '你好，请用一句话介绍库库AI'),
+  chatTimes: Number(pick('chat-times', 'KUKUCHECKIN_CHAT_TIMES', 'chatTimes', '3')),  // 活动“与库库AI对话 N/3”，每轮需先点“去完成”再发消息才计数
+  message: pick('message', 'KUKUCHECKIN_CHAT_MESSAGE', 'chatMessage', '回复我【1】 别说别的别思考'),
 };
 
 // ----------------------------------------------------------------------------
@@ -415,16 +415,29 @@ async function doSignIn(ac) {
   return 'no_sign_control';
 }
 
-// 对话任务：在主页输入框真实发 N 条消息（活动按“与库库AI对话 N/3”计数，积分+10/次）。
-async function doChats(cdp, n, message) {
-  let sent = 0;
+// 对话任务：活动要求先点“与库库AI对话”卡的“去完成”（会关闭活动并跳到新任务），再发消息才计入 N/3。
+const COMPS_SCROLL_EVAL = String.raw`(() => {const tl=document.querySelector('.kuku-task-list');if(tl)tl.scrollIntoView({block:'center'});const sc=[...document.querySelectorAll('*')].find(e=>e.scrollHeight>e.clientHeight+100&&/auto|scroll/.test(getComputedStyle(e).overflowY));if(sc)sc.scrollTop+=500;else window.scrollBy(0,500);})()`;
+const CHAT_GO_EVAL = String.raw`(() => {const n=(s)=>(s||'').replace(/\s+/g,' ').trim();const card=[...document.querySelectorAll('.kuku-task-card')].find(x=>/对话/.test(n((x.querySelector('.kuku-task-card__title')||{}).textContent)));if(!card)return null;const btn=card.querySelector('.kuku-task-card__btn')||card.querySelector('[class*="btn"]');if(!btn)return null;const r=btn.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
+
+async function doChats(cdp, port, n, message) {
+  let done = 0;
   for (let k = 0; k < n; k++) {
+    await clickAvatar(cdp);            // 开账户菜单
+    await clickActivityEntry(cdp);     // 签到领奖 -> 打开 comps 活动
+    const ac = await attachComps(port, 8000);
+    if (ac) {
+      for (let i = 0; i < 6; i++) { await ac.eval(COMPS_SCROLL_EVAL); await sleep(350); }
+      const b = await ac.eval(CHAT_GO_EVAL);
+      if (b && b.x) await ac.clickAt(b.x, b.y);   // 点“去完成”：关闭活动、回到新任务
+      ac.close();
+      await sleep(2500);
+    }
     const r = await doConversation(cdp, message);
     if (r.status !== 'sent') break;
-    sent++;
+    done++;
     await sleep(1500);
   }
-  return sent;
+  return done;
 }
 
 // 完成一次对话：聚焦输入框 -> 输入消息 -> 回车 -> 等待会话创建
@@ -593,7 +606,7 @@ async function main() {
     if (!OPTS.skipChat) {
       if (ac) { ac.close(); ac = null; }
       await dismissOverlay(cdp);           // 收起活动弹窗，回到主工作台输入框
-      const sent = await doChats(cdp, OPTS.chatTimes, OPTS.message);
+      const sent = await doChats(cdp, OPTS.port, OPTS.chatTimes, OPTS.message);
       result.chat = sent > 0 ? ('sent_' + sent) : 'none';
     }
 
