@@ -67,6 +67,9 @@ const OPTS = {
   noPush: !!argv['no-push'],
   skipChat: !!argv['skip-chat'],
   skipCheckin: !!argv['skip-checkin'],
+  skipBrowse: !!argv['skip-browse'],
+  skipLottery: !!argv['skip-lottery'],
+  maxDraws: Number(pick('max-draws', 'KUKUCHECKIN_MAX_DRAWS', 'maxDraws', '12')),
   chatTimes: Number(pick('chat-times', 'KUKUCHECKIN_CHAT_TIMES', 'chatTimes', '3')),  // 活动“与库库AI对话 N/3”，每轮需先点“去完成”再发消息才计数
   message: pick('message', 'KUKUCHECKIN_CHAT_MESSAGE', 'chatMessage', '回复我【1】 别说别的别思考'),
 };
@@ -440,6 +443,56 @@ async function doChats(cdp, port, n, message) {
   return done;
 }
 
+// 打开活动页（点头像→签到领奖→附着 comps iframe），返回其 CDP 或 null。
+async function openActivity(cdp, port) {
+  await clickAvatar(cdp);
+  await clickActivityEntry(cdp);
+  return await attachComps(port, 9000);
+}
+
+const CARD_GO_EVAL = (kw) => `(() => {const n=(s)=>(s||'').replace(/\\s+/g,' ').trim();const card=[...document.querySelectorAll('.kuku-task-card')].find(x=>n((x.querySelector('.kuku-task-card__title')||{}).textContent).includes(${JSON.stringify(kw)}));if(!card)return null;const btn=card.querySelector('.kuku-task-card__btn')||card.querySelector('[class*="btn"]');if(!btn)return null;const r=btn.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
+const LOTTERY_BTN_EVAL = String.raw`(() => {const b=document.querySelector('.kuku-btn-box .kuku-btn')||document.querySelector('.kuku-lottery .kuku-btn');if(!b)return null;b.scrollIntoView({block:'center'});const r=b.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
+const REM_EVAL = String.raw`+((document.body.innerText||'').match(/剩余\s*(\d+)\s*次/)||[])[1]||0`;
+const CLOSE_PRIZE_EVAL = String.raw`(() => {const b=document.querySelector('.kuku-reward-btn')||document.querySelector('.kuku-reward-close');if(b){b.click();return true;}return false;})()`;
+
+// 浏览知识广场：点该任务卡“去完成”→跳到知识广场页（计入“每日限1次”，+1 抽奖机会）。
+async function doBrowse(cdp, port) {
+  const ac = await openActivity(cdp, port);
+  if (!ac) return 'no_activity';
+  for (let i = 0; i < 6; i++) { await ac.eval(COMPS_SCROLL_EVAL); await sleep(300); }
+  const b = await ac.eval(CARD_GO_EVAL('浏览'));
+  let st = 'no_btn';
+  if (b && b.x) { await ac.clickAt(b.x, b.y); st = 'browsed'; }
+  ac.close();
+  await sleep(2000);
+  return st;
+}
+
+// 抽奖：反复点抽奖按钮直到无剩余次数，每次等结果弹窗出现后点“开心收下”(.kuku-reward-btn)关闭。
+async function doLottery(cdp, port, maxDraws) {
+  const ac = await openActivity(cdp, port);
+  if (!ac) return 'no_activity';
+  await ac.eval(`window.scrollTo(0,0)`).catch(() => {});
+  let drawn = 0;
+  for (let i = 0; i < maxDraws; i++) {
+    await ac.eval(CLOSE_PRIZE_EVAL).catch(() => {}); await sleep(700);   // 先清遗留弹窗
+    let rem = 0;                                                          // 读剩余，带重试等渲染
+    for (let r = 0; r < 5; r++) { rem = await ac.eval(REM_EVAL); if (rem > 0) break; await sleep(600); }
+    if (!rem || rem <= 0) break;
+    const btn = await ac.eval(LOTTERY_BTN_EVAL);
+    if (!btn) break;
+    await sleep(500);
+    await ac.clickAt(btn.x, btn.y);
+    let popped = false;                                                   // 结果弹窗出现=抽成了
+    for (let k = 0; k < 12; k++) { await sleep(500); if (await ac.eval(`!!document.querySelector('.kuku-reward-pop')`)) { popped = true; break; } }
+    await ac.eval(CLOSE_PRIZE_EVAL).catch(() => {});                       // 点“开心收下”
+    await sleep(1200);
+    if (popped) drawn++; else break;                                       // 没弹结果=没抽成，停
+  }
+  ac.close();
+  return drawn;
+}
+
 // 完成一次对话：聚焦输入框 -> 输入消息 -> 回车 -> 等待会话创建
 async function doConversation(cdp, message) {
   await closeMenu(cdp);
@@ -572,6 +625,8 @@ async function main() {
     status: 'unknown',
     checkin: null,   // 每日签到（连签送 SVIP）
     chat: null,      // 与库库AI对话（积分+10/次）
+    browse: null,    // 浏览知识广场（+1 抽奖机会）
+    lottery: null,   // 抽奖（消耗剩余次数）
     detail: '',
     time: new Date().toLocaleString('zh-CN', { hour12: false }),
   };
@@ -601,18 +656,23 @@ async function main() {
 
     // ---- 每日签到 ----
     if (!OPTS.skipCheckin) result.checkin = await doSignIn(ac);
+    if (ac) { ac.close(); ac = null; await dismissOverlay(cdp); }   // 收起活动弹窗，回主界面
 
-    // ---- 对话任务（发 N 条真实消息）----
+    // ---- 对话任务（每轮点"去完成"再发消息）----
     if (!OPTS.skipChat) {
-      if (ac) { ac.close(); ac = null; }
-      await dismissOverlay(cdp);           // 收起活动弹窗，回到主工作台输入框
       const sent = await doChats(cdp, OPTS.port, OPTS.chatTimes, OPTS.message);
       result.chat = sent > 0 ? ('sent_' + sent) : 'none';
     }
+    // ---- 浏览知识广场 ----
+    if (!OPTS.skipBrowse) result.browse = await doBrowse(cdp, OPTS.port);
+    // ---- 抽奖（消耗所有剩余次数）----
+    if (!OPTS.skipLottery) { const d = await doLottery(cdp, OPTS.port, OPTS.maxDraws); result.lottery = (typeof d === 'number') ? ('drawn_' + d) : d; }
 
     const notes = [];
     if (!OPTS.skipCheckin) notes.push('签到:' + result.checkin);
     if (!OPTS.skipChat) notes.push('对话:' + result.chat);
+    if (!OPTS.skipBrowse) notes.push('浏览:' + result.browse);
+    if (!OPTS.skipLottery) notes.push('抽奖:' + result.lottery);
     result.detail = notes.join('；');
 
     if (!OPTS.skipCheckin) {
@@ -653,7 +713,7 @@ async function report(result) {
   console.log('\n[RESULT] ' + JSON.stringify(result, null, 2));
   if (!OPTS.noPush && OPTS.feishu) {
     const emoji = result.status === 'success' ? '✅' : result.status === 'already_done' ? 'ℹ️' : result.status === 'partial' ? '🟡' : '❌';
-    const text = `${emoji} 库库AI 自动签到\n状态: ${result.status}\n签到: ${result.checkin || '-'}\n对话: ${result.chat || '-'}\n详情: ${result.detail}\n时间: ${result.time}`;
+    const text = `${emoji} 库库AI 自动签到\n状态: ${result.status}\n签到: ${result.checkin || '-'}\n对话: ${result.chat || '-'}\n浏览: ${result.browse || '-'}\n抽奖: ${result.lottery || '-'}\n详情: ${result.detail}\n时间: ${result.time}`;
     await pushFeishu(OPTS.feishu, text);
   }
 }
@@ -669,10 +729,13 @@ function printHelp() {
   --force                      库库AI 在运行但无调试端口时，强制关闭并带端口重启
   --profile <path>             使用独立 user-data-dir 启动（隔离测试，不影响主账号）
   --close                      签到完成后关闭库库AI 进程（适合无人值守）
-  --message <text>             对话任务发送的消息内容（默认：“你好，请用一句话介绍库库AI”）
-  --chat-times <n>             对话任务发送消息的条数（活动计“与库库AI对话 N/3”，默认 3）
-  --skip-chat                  只做签到，不做对话
-  --skip-checkin               只做对话，不做签到
+  --message <text>             对话任务发送的消息内容（默认：“回复我【1】 别说别的别思考”）
+  --chat-times <n>             对话任务轮数（活动计“与库库AI对话 N/3”，每轮点“去完成”再发一条，默认 3）
+  --max-draws <n>              抽奖最多消耗次数上限（默认 12）
+  --skip-chat                  跳过对话任务
+  --skip-checkin               跳过每日签到
+  --skip-browse                跳过浏览知识广场
+  --skip-lottery               跳过抽奖
   --feishu <url>               签到结果推送飞书群机器人 webhook（也可 config.json / 环境变量）
   --no-push                    只执行、不推送飞书
   --help                       显示本帮助
