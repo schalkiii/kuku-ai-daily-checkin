@@ -70,7 +70,7 @@ const OPTS = {
   skipCheckin: !!argv['skip-checkin'],
   skipBrowse: !!argv['skip-browse'],
   skipLottery: !!argv['skip-lottery'],
-  maxDraws: Number(pick('max-draws', 'KUKUCHECKIN_MAX_DRAWS', 'maxDraws', '12')),
+  maxDraws: Number(pick('max-draws', 'KUKUCHECKIN_MAX_DRAWS', 'maxDraws', '40')),
   chatTimes: Number(pick('chat-times', 'KUKUCHECKIN_CHAT_TIMES', 'chatTimes', '3')),  // 活动“与库库AI对话 N/3”，每轮需先点“去完成”再发消息才计数
   message: pick('message', 'KUKUCHECKIN_CHAT_MESSAGE', 'chatMessage', '回复我【1】 别说别的别思考'),
 };
@@ -455,6 +455,7 @@ const CARD_GO_EVAL = (kw) => `(() => {const n=(s)=>(s||'').replace(/\\s+/g,' ').
 const LOTTERY_BTN_EVAL = String.raw`(() => {const b=document.querySelector('.kuku-btn-box .kuku-btn')||document.querySelector('.kuku-lottery .kuku-btn');if(!b)return null;b.scrollIntoView({block:'center'});const r=b.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
 const REM_EVAL = String.raw`+((document.body.innerText||'').match(/剩余\s*(\d+)\s*次/)||[])[1]||0`;
 const CLOSE_PRIZE_EVAL = String.raw`(() => {const b=document.querySelector('.kuku-reward-btn')||document.querySelector('.kuku-reward-close');if(b){b.click();return true;}return false;})()`;
+const POP_VISIBLE_EVAL = String.raw`(() => {const p=document.querySelector('.kuku-reward-pop');if(!p)return false;const r=p.getBoundingClientRect();const cs=getComputedStyle(p);return r.height>10&&cs.display!=='none'&&cs.visibility!=='hidden'&&+cs.opacity>0.1;})()`;
 
 // 浏览知识广场：点该任务卡“去完成”→跳到知识广场页（计入“每日限1次”，+1 抽奖机会）。
 async function doBrowse(cdp, port) {
@@ -469,7 +470,7 @@ async function doBrowse(cdp, port) {
   return st;
 }
 
-// 抽奖：反复点抽奖按钮直到无剩余次数，每次等结果弹窗出现后点“开心收下”(.kuku-reward-btn)关闭。
+// 抽奖：反复点抽奖按钮直到“剩余0次”或达上限；以“剩余次数确实减少”计一次成功（.kuku-reward-pop 会隐藏残留在 DOM，不能只判存在）。
 async function doLottery(cdp, port, maxDraws) {
   const ac = await openActivity(cdp, port);
   if (!ac) return 'no_activity';
@@ -484,11 +485,11 @@ async function doLottery(cdp, port, maxDraws) {
     if (!btn) break;
     await sleep(500);
     await ac.clickAt(btn.x, btn.y);
-    let popped = false;                                                   // 结果弹窗出现=抽成了
-    for (let k = 0; k < 12; k++) { await sleep(500); if (await ac.eval(`!!document.querySelector('.kuku-reward-pop')`)) { popped = true; break; } }
+    for (let k = 0; k < 14; k++) { await sleep(500); if (await ac.eval(POP_VISIBLE_EVAL)) break; }  // 等结果弹窗“可见”
     await ac.eval(CLOSE_PRIZE_EVAL).catch(() => {});                       // 点“开心收下”
-    await sleep(1200);
-    if (popped) drawn++; else break;                                       // 没弹结果=没抽成，停
+    await sleep(1000);
+    const rem2 = await ac.eval(REM_EVAL);
+    if (rem2 < rem) drawn++; else break;                                   // 以剩余确实减少为准
   }
   ac.close();
   return drawn;
