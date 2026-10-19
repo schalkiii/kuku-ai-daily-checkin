@@ -8,9 +8,9 @@
 ```bat
 run-once.bat                              :: 关闭库库AI -> 带调试端口重启 -> 签到+对话领积分
 node src/auto-checkin.mjs --port 9333     :: 前台直跑（库库AI 已在 9333 上运行时）
-install-schedule.bat 12:00                :: 注册每日计划任务（KukuDailyCheckin）
+install-schedule.bat 10:10                :: 注册每日计划任务（KukuDailyCheckin）
 ```
-退出码：0 成功/部分成功；2 今日两项均已领；1 失败（未登录、找不到按钮等）。
+退出码：0 成功/部分成功；2 今日签到已领（无需重复）；1 失败（未登录、找不到活动页等）。
 
 ## 技术栈与约定
 - Node ESM，`.mjs`；只用内置 `fetch` / 全局 `WebSocket`；不引第三方包。

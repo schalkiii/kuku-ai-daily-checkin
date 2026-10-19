@@ -20,8 +20,8 @@
 :: 1) 一键：关闭库库AI -> 带调试端口重启 -> 完成签到 + 对话领积分
 run-once.bat
 
-:: 2)（可选）注册每天定时自动运行，例如每天 12:00
-install-schedule.bat 12:00
+:: 2)（可选）注册每天定时自动运行，例如每天 10:10
+install-schedule.bat 10:10
 
 :: 卸载定时任务
 uninstall-schedule.bat
@@ -100,7 +100,7 @@ node src/auto-checkin.mjs [选项]
 一键注册（推荐）：
 
 ```bat
-install-schedule.bat 12:00
+install-schedule.bat 10:10
 ```
 
 内部实际调用 `install-schedule.ps1`（纯 ASCII）注册，带 `-StartWhenAvailable`：错过时点（关机/睡眠）后开机或登录时尽快补跑一次，而非跳过当天。

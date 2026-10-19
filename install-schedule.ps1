@@ -17,7 +17,7 @@
 #Requires -Version 5
 [CmdletBinding()]
 param(
-    [string]$Time = '12:00',
+    [string]$Time = '10:10',
     [string]$TaskName = 'KukuDailyCheckin'
 )
 $ErrorActionPreference = 'Stop'

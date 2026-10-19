@@ -1,9 +1,9 @@
 @echo off
 rem Register a daily scheduled task "KukuDailyCheckin" that runs scheduled-run.bat.
-rem Usage: install-schedule.bat [HH:MM]   (default 12:00, 24-hour). Re-run to change the time.
+rem Usage: install-schedule.bat [HH:MM]   (default 10:10, 24-hour). Re-run to change the time.
 setlocal
 set TIMEARG=%1
-if "%TIMEARG%"=="" set TIMEARG=12:00
+if "%TIMEARG%"=="" set TIMEARG=10:10
 set SCRIPT_DIR=%~dp0
 
 echo Registering scheduled task "KukuDailyCheckin" daily at %TIMEARG% ...

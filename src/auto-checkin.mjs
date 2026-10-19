@@ -216,7 +216,7 @@ async function probePort(port) {
   } catch { return { open: false, isKuku: false, version: null }; }
 }
 
-async function waitForPageTarget(port, timeoutMs = 40000) {
+async function waitForPageTarget(port, timeoutMs = 60000) {
   const deadline = Date.now() + timeoutMs;
   let last = null;
   while (Date.now() < deadline) {
