@@ -497,7 +497,8 @@ async function doBrowse(cdp, port) {
   let st = 'no_btn';
   if (b && b.x) { await ac.clickAt(b.x, b.y); st = 'browsed'; }
   ac.close();
-  await sleep(2000);
+  if (st === 'browsed') await sleep(10500);   // 任务要求“浏览10s知识广场”，在知识广场停留10s再返回
+  else await sleep(1500);
   return st;
 }
 
