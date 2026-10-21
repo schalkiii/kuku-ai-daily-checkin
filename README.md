@@ -8,9 +8,9 @@
 - **每日签到**：连签 7 天解锁网盘 SVIP（+积分/抽奖机会）
 - **与库库AI对话**（每日 3 次）：每次 积分 +10、抽奖机会 +1
 - **浏览知识广场**（每日 1 次）：抽奖机会 +1
-- **抽奖**：消耗所有剩余抽奖机会赢奖品（⚠️ 当前**暂停**：客户端自动升级到 1.6.20 后抽奖 UI 变化，抽中判定/关弹窗不稳，待升级稳定版并重做后恢复；可用 `LOTTERY_PAUSED=false` 重新开启）
+- **抽奖**：消耗所有剩余抽奖机会赢奖品（1.6.22 新 UI 已适配：`.pc-prize-entry` → 弹窗 `.pc-prize-btn`）
 
-本脚本每天自动完成签到、3 次对话、浏览知识广场（抽奖暂缓），可推送到飞书群，也支持注册成 Windows 计划任务自动运行（CDP 需登录/锁屏会话；真正免登录的无人值守兜底见文末「脱机 / 纯接口领取」章节）。
+本脚本每天自动完成签到、3 次对话、浏览知识广场并抽奖，可推送到飞书群，也支持注册成 Windows 计划任务自动运行（CDP 需登录/锁屏会话；真正免登录的无人值守兜底见文末「脱机 / 纯接口领取」章节）。
 
 ---
 
@@ -42,15 +42,15 @@ uninstall-schedule.bat
    随后 `http://127.0.0.1:9333/json` 可看到主窗口 page：
    `file:///.../app.asar/out/renderer/index.html#/workbench/new-task`
 
-3. **活动是内嵌 iframe**：点左下角头像 → 账户菜单里的 **「签到领奖」行** → 打开活动页 `https://kuku.baidu.com/comps/view/<id>`（独立 CDP target，用 `/json` 按 `comps/view` 匹配附着）。活动业务接口都带 App 注入的 `window.jsToken`，**无法脱机**，只能在真实页面里点。
+3. **活动是内嵌 iframe**：点左下角头像 → 账户菜单 **「签到领奖」** → 打开活动页（新版 1.6.22 为 `https://kuku.baidu.com/operation/activitys/kukuPcSignAct/main`，旧版为 `comps/view/<id>`；脚本按二者之一匹配附着）。活动业务接口都带 App 注入的 `window.jsToken`，**无法脱机**。
 
 4. **四类动作**（脚本用文本语义 + 类名定位，抗改版）：
    | 动作 | 定位方式 |
    | --- | --- |
-   | 每日签到 | 活动内 `img.kuku-sign-in__btn`，点击即签到；已签判定 = 页内存在 `.kuku-sign-in__day--todaySigned` |
-   | 与库库AI对话 | 任务卡 `.kuku-task-card`（标题含"对话"）里的 `.kuku-task-card__btn`「去完成」→ 关闭活动跳到新任务 → 在 `.tiptap/.ProseMirror/[contenteditable]` 输入框发消息并回车，该会话才计入 `N/3` |
-   | 浏览知识广场 | 任务卡（标题含"浏览"）的「去完成」→ 跳到 `#/workbench/knowledge-square`（每日限1次，+1 抽奖机会） |
-   | 抽奖 | 活动内 `.kuku-btn-box .kuku-btn`（需先 scrollIntoView）→ 点一下转一次 → 结果弹窗 `.kuku-reward-pop` 出现后点 `.kuku-reward-btn`（“开心收下”）→ 循环到“剩余0次”。⚠️ **当前暂停**（1.6.20 起不稳） |
+   | 每日签到 | `.pc-sign-btn`（旧版 `.kuku-sign-in__btn`），点击签到；已签判定 `.pc-sign-btn.is-signed` / `.pc-sign-cell--today-signed`（旧 `.kuku-sign-in__day--todaySigned`） |
+   | 与库库聊聊热门话题(对话) | 任务卡 `.pc-kuku-task-card`（旧 `.kuku-task-card`，标题含“聊聊热门话题/对话”）的 `__btn`「去完成」→ 跳到新任务 → 输入框 `.tiptap/.ProseMirror/[contenteditable]` 发消息回车，才计入 `N/3` |
+   | 浏览10s知识广场 | 任务卡（标题含“浏览”）的 `__btn`「去完成」→ 跳到 `#/workbench/knowledge-square`（每日1次，+1 抽奖机会） |
+   | 抽奖 | `.pc-prize-entry`（有次数时非 `-empty`）→ 弹窗 `.pc-prize-dialog` → 循环 JS 点 `.pc-prize-btn`（转一次）→ 剩余0 后 `.pc-prize-close` 关闭 |
 
    > ⚠️ 对话任务**必须先在活动页点「去完成」再发消息**才计数；平时直接聊天不归属到活动（实测：点「去完成」后发一条 → `0/3→1/3`）。抽奖/对话/浏览都靠同一个活动 iframe。
 
