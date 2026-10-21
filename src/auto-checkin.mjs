@@ -75,6 +75,10 @@ const OPTS = {
   message: pick('message', 'KUKUCHECKIN_CHAT_MESSAGE', 'chatMessage', '回复我【1】 别说别的别思考'),
 };
 
+// 抽奖暂停：客户端从 1.6.16 自动升级到 1.6.20，抽奖 UI/行为变化（抽中判定与关中奖弹窗不稳）。
+// 待升级到稳定版并重新逆向抽奖流程后，改回 false 即可恢复。
+const LOTTERY_PAUSED = true;
+
 // ----------------------------------------------------------------------------
 // 定位库库AI 可执行文件（自定义路径 -> 运行中进程 -> 注册表 -> 常见目录）
 // ----------------------------------------------------------------------------
@@ -699,14 +703,14 @@ async function main() {
     }
     // ---- 浏览知识广场 ----
     if (!OPTS.skipBrowse) result.browse = await doBrowse(cdp, OPTS.port);
-    // ---- 抽奖（消耗所有剩余次数）----
-    if (!OPTS.skipLottery) { const d = await doLottery(cdp, OPTS.port, OPTS.maxDraws); result.lottery = (typeof d === 'number') ? ('drawn_' + d) : d; }
+    // ---- 抽奖（暂停中：见 LOTTERY_PAUSED；升级稳定版后重做）----
+    if (!OPTS.skipLottery && !LOTTERY_PAUSED) { const d = await doLottery(cdp, OPTS.port, OPTS.maxDraws); result.lottery = (typeof d === 'number') ? ('drawn_' + d) : d; }
 
     const notes = [];
     if (!OPTS.skipCheckin) notes.push('签到:' + result.checkin);
     if (!OPTS.skipChat) notes.push('对话:' + result.chat);
     if (!OPTS.skipBrowse) notes.push('浏览:' + result.browse);
-    if (!OPTS.skipLottery) notes.push('抽奖:' + result.lottery);
+    if (!OPTS.skipLottery && !LOTTERY_PAUSED) notes.push('抽奖:' + result.lottery);
     result.detail = notes.join('；');
 
     if (!OPTS.skipCheckin) {
