@@ -5,8 +5,8 @@
  * 参考 https://github.com/schalkiii/trae-daily-checkin 的实现思路，
  * 针对本地库库AI PC 客户端（Electron）通过 Chrome DevTools Protocol (CDP) 操控 DOM。
  *
- * 活动（2026-10 改版后）：账户菜单点「签到领奖」打开 kuku.baidu.com/comps/view 活动页（“金秋厚礼”），本脚本自动做满：
- *   1) 每日签到：连签 7 天解锁网盘 SVIP（点 img.kuku-sign-in__btn）
+ * 活动（2026-10 改版；1.6.22 重构为 operation/activitys/kukuPcSignAct/main，类名 pc-*）：账户菜单点「签到领奖」打开活动页，本脚本自动做满：
+ *   1) 每日签到：连签 7 天解锁网盘 SVIP（1.6.22+ 点 .pc-sign-btn；旧版 .kuku-sign-in__btn）
  *   2) 与库库AI对话 ×3：先点任务卡「去完成」再发消息才计入（积分 +10/次 + 抽奖机会）
  *   3) 浏览知识广场：点「去完成」跳知识广场（每日1次，+1 抽奖机会）
  *   4) 抽奖：点抽奖按钮转一次→点“开心收下”→循环到剩余0次（邀请需他人，不自动）
@@ -75,9 +75,9 @@ const OPTS = {
   message: pick('message', 'KUKUCHECKIN_CHAT_MESSAGE', 'chatMessage', '回复我【1】 别说别的别思考'),
 };
 
-// 抽奖暂停：客户端从 1.6.16 自动升级到 1.6.20，抽奖 UI/行为变化（抽中判定与关中奖弹窗不稳）。
-// 待升级到稳定版并重新逆向抽奖流程后，改回 false 即可恢复。
-const LOTTERY_PAUSED = true;
+// 抽奖开关：1.6.22 已重新逆向并适配（pc-prize-entry / pc-prize-dialog / pc-prize-btn，JS .click 可触发），已恢复。
+// 若后续改版再导致异常，可临时置 true 关闭。
+const LOTTERY_PAUSED = false;
 
 // ----------------------------------------------------------------------------
 // 定位库库AI 可执行文件（自定义路径 -> 运行中进程 -> 注册表 -> 常见目录）
@@ -396,7 +396,7 @@ async function findCompsTarget(port, timeoutMs = 12000) {
   while (Date.now() < deadline) {
     try {
       const list = await httpJson(`http://127.0.0.1:${port}/json`);
-      const fr = list.find((t) => /comps\/view/.test(t.url || ''));
+      const fr = list.find((t) => /(comps\/view|operation\/activitys)/.test(t.url || ''));
       if (fr && fr.webSocketDebuggerUrl) return fr;
     } catch { /* ignore */ }
     await sleep(500);
@@ -414,15 +414,16 @@ async function attachComps(port, timeoutMs = 8000) {
   return ac;
 }
 
-// 每日签到：点击 comps 活动内的签到按钮（img.kuku-sign-in__btn）；今天已签则页内存在 .kuku-sign-in__day--todaySigned。
+// 每日签到：按钮兼容新旧版（1.6.22+ 为 .pc-sign-btn，旧版为 .kuku-sign-in__btn）；已签判定兼容 .is-signed / --today-signed。
+const SIGN_SIGNED_SEL = '.pc-sign-btn.is-signed, .pc-sign-cell--today-signed, .kuku-sign-in__day--todaySigned';
 async function doSignIn(ac) {
   const probe = String.raw`(() => {
-    const b = document.querySelector('.kuku-sign-in__btn');
+    const b = document.querySelector('.pc-sign-btn, .kuku-sign-in__btn');
     const r = b && b.getBoundingClientRect();
-    return { signed: !!document.querySelector('.kuku-sign-in__day--todaySigned'),
+    return { signed: !!document.querySelector('.pc-sign-btn.is-signed, .pc-sign-cell--today-signed, .kuku-sign-in__day--todaySigned'),
       hasBtn: !!b, x: r ? Math.round(r.x + r.width / 2) : 0, y: r ? Math.round(r.y + r.height / 2) : 0 };
   })()`;
-  const isSigned = () => ac.eval(`!!document.querySelector('.kuku-sign-in__day--todaySigned')`);
+  const isSigned = () => ac.eval(`!!document.querySelector('${SIGN_SIGNED_SEL}')`);
   for (let i = 0; i < 24; i++) {
     const st = await ac.eval(probe);
     if (st && st.signed) return 'already_signed';
@@ -440,8 +441,8 @@ async function doSignIn(ac) {
 }
 
 // 对话任务：活动要求先点“与库库AI对话”卡的“去完成”（会关闭活动并跳到新任务），再发消息才计入 N/3。
-const COMPS_SCROLL_EVAL = String.raw`(() => {const tl=document.querySelector('.kuku-task-list');if(tl)tl.scrollIntoView({block:'center'});const sc=[...document.querySelectorAll('*')].find(e=>e.scrollHeight>e.clientHeight+100&&/auto|scroll/.test(getComputedStyle(e).overflowY));if(sc)sc.scrollTop+=500;else window.scrollBy(0,500);})()`;
-const CHAT_GO_EVAL = String.raw`(() => {const n=(s)=>(s||'').replace(/\s+/g,' ').trim();const card=[...document.querySelectorAll('.kuku-task-card')].find(x=>/对话/.test(n((x.querySelector('.kuku-task-card__title')||{}).textContent)));if(!card)return null;const btn=card.querySelector('.kuku-task-card__btn')||card.querySelector('[class*="btn"]');if(!btn)return null;const r=btn.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
+const COMPS_SCROLL_EVAL = String.raw`(() => {const tl=document.querySelector('.pc-kuku-task-list, .kuku-task-list');if(tl)tl.scrollIntoView({block:'center'});const sc=[...document.querySelectorAll('*')].find(e=>e.scrollHeight>e.clientHeight+100&&/auto|scroll/.test(getComputedStyle(e).overflowY));if(sc)sc.scrollTop+=500;else window.scrollBy(0,500);})()`;
+const CHAT_GO_EVAL = String.raw`(() => {const n=(s)=>(s||'').replace(/\s+/g,' ').trim();const card=[...document.querySelectorAll('.pc-kuku-task-card, .kuku-task-card')].find(x=>/对话|热门话题|聊聊/.test(n((x.querySelector('.pc-kuku-task-card__title, .kuku-task-card__title')||{}).textContent)));if(!card)return null;const btn=card.querySelector('.pc-kuku-task-card__btn, .kuku-task-card__btn')||card.querySelector('[class*="btn"]');if(!btn)return null;const r=btn.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
 
 async function doChats(cdp, port, n, message) {
   let done = 0;
@@ -481,7 +482,7 @@ async function openActivity(cdp, port) {
   return await attachActivity(cdp, port);
 }
 
-const CARD_GO_EVAL = (kw) => `(() => {const n=(s)=>(s||'').replace(/\\s+/g,' ').trim();const card=[...document.querySelectorAll('.kuku-task-card')].find(x=>n((x.querySelector('.kuku-task-card__title')||{}).textContent).includes(${JSON.stringify(kw)}));if(!card)return null;const btn=card.querySelector('.kuku-task-card__btn')||card.querySelector('[class*="btn"]');if(!btn)return null;const r=btn.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
+const CARD_GO_EVAL = (kw) => `(() => {const n=(s)=>(s||'').replace(/\\s+/g,' ').trim();const card=[...document.querySelectorAll('.pc-kuku-task-card, .kuku-task-card')].find(x=>n((x.querySelector('.pc-kuku-task-card__title, .kuku-task-card__title')||{}).textContent).includes(${JSON.stringify(kw)}));if(!card)return null;const btn=card.querySelector('.pc-kuku-task-card__btn, .kuku-task-card__btn')||card.querySelector('[class*="btn"]');if(!btn)return null;const r=btn.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
 const LOTTERY_BTN_EVAL = String.raw`(() => {const b=document.querySelector('.kuku-btn-box .kuku-btn')||document.querySelector('.kuku-lottery .kuku-btn');if(!b)return null;b.scrollIntoView({block:'center'});const r=b.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
 const REM_EVAL = String.raw`+((document.body.innerText||'').match(/剩余\s*(\d+)\s*次/)||[])[1]||0`;
 const PRIZE_CLOSE_RECT_EVAL = String.raw`(() => {const p=document.querySelector('.kuku-reward-pop');if(!p)return null;const pr=p.getBoundingClientRect();const cs=getComputedStyle(p);if(!(pr.height>10&&cs.display!=='none'&&cs.visibility!=='hidden'&&+cs.opacity>0.1))return null;const b=document.querySelector('.kuku-reward-btn')||document.querySelector('.kuku-reward-close');if(!b)return null;const r=b.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
@@ -500,35 +501,37 @@ async function doBrowse(cdp, port) {
   return st;
 }
 
-// 关闭中奖弹窗：这些组件不认 JS .click()，必须用真实鼠标事件点“开心收下”。
-async function closePrize(ac) {
-  const p = await ac.eval(PRIZE_CLOSE_RECT_EVAL);
-  if (p) { await ac.clickAt(p.x, p.y); await sleep(900); return true; }
-  return false;
-}
-
-// 抽奖：只要“剩余>0”就继续；每轮先真实点击关掉遗留中奖弹窗，再点抽奖；以“结果弹窗可见”计一次成功。
+// 抽奖（1.6.22+）：点 .pc-prize-entry 开弹窗（有次数时非 -empty，会先自动转一次）→ 循环点 .pc-prize-btn（JS .click 可触发）→ 剩余0/不可点为止 → .pc-prize-close 关闭。
 async function doLottery(cdp, port, maxDraws) {
   const ac = await openActivity(cdp, port);
   if (!ac) return 'no_activity';
   await ac.eval(`window.scrollTo(0,0)`).catch(() => {});
+  const entry = await ac.eval(String.raw`(() => {const e=document.querySelector('.pc-prize-entry');if(!e)return null;const r=e.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),empty:/-empty/.test(e.className)};})()`);
+  if (!entry) { ac.close(); return 'no_entry'; }
+  if (entry.empty) { ac.close(); return 'no_chance'; }
+  await ac.clickAt(entry.x, entry.y);                 // 打开抽奖弹窗
+  await sleep(1500);
+  const REM2 = String.raw`(() => {const c=document.querySelector('.pc-prize-btn-count');const b=document.querySelector('.pc-prize-btn');const t=((c&&c.textContent)||'')+' '+((b&&b.textContent)||'');const m=t.match(/剩余\s*(\d+)/);return m?+m[1]:0;})()`;
+  const BTNSTATE = String.raw`(() => {const b=document.querySelector('.pc-prize-btn');return b?{cls:b.className,ok:!/is-running|is-disabled/.test(b.className)}:{ok:false};})()`;
   let drawn = 0;
   for (let i = 0; i < maxDraws; i++) {
-    await closePrize(ac);                                                // 真实点击关掉遗留中奖弹窗
-    let rem = 0;                                                          // 读剩余（重试等渲染）
-    for (let r = 0; r < 6; r++) { rem = await ac.eval(REM_EVAL); if (rem > 0) break; await sleep(700); }
+    let rem = 0;
+    for (let r = 0; r < 8; r++) { rem = await ac.eval(REM2); if (rem > 0) break; await sleep(600); }
     if (!rem || rem <= 0) break;
-    const btn = await ac.eval(LOTTERY_BTN_EVAL);
-    if (!btn) break;
-    await sleep(500);
-    await ac.clickAt(btn.x, btn.y);
-    let popped = false;                                                   // 等中奖弹窗“可见”=抽成了
-    for (let k = 0; k < 16; k++) { await sleep(500); if (await ac.eval(POP_VISIBLE_EVAL)) { popped = true; break; } }
-    if (!popped) break;                                                   // 没弹=没抽成/次数已尽，停
+    let ok = false;                                     // 等按钮可用（非转动/禁用）
+    for (let k = 0; k < 20; k++) { const st = await ac.eval(BTNSTATE); if (st && st.ok) { ok = true; break; } await sleep(600); }
+    if (!ok) break;
+    await ac.eval(`(() => {const b=document.querySelector('.pc-prize-btn');if(b)b.click();})()`);   // JS click 可触发
     drawn++;
-    await closePrize(ac);                                                 // 真实点击“开心收下”
-    await sleep(1200);
+    for (let k = 0; k < 30; k++) {                      // 等这次转完（可点 或 剩余<=0）
+      await sleep(600);
+      const st = await ac.eval(`(() => {const b=document.querySelector('.pc-prize-btn');const c=document.querySelector('.pc-prize-btn-count');const t=((c&&c.textContent)||'')+' '+((b&&b.textContent)||'');const m=t.match(/剩余\\s*(\\d+)/);return {cls:b?b.className:'',rem:m?+m[1]:null};})()`);
+      if (st && st.rem !== null && st.rem <= 0) break;
+      if (st && !/is-running|is-disabled/.test(st.cls)) break;
+    }
+    await sleep(800);
   }
+  await ac.eval(`(() => {const x=document.querySelector('.pc-prize-close');if(x)x.click();})()`).catch(() => {});
   ac.close();
   return drawn;
 }
