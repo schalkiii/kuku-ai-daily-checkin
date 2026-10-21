@@ -342,7 +342,23 @@ true;
 // 业务动作
 // ----------------------------------------------------------------------------
 
+// 清掉可能遮挡左下角头像的浮层（如“V1.6.x 可更新”更新提示卡）。只点关闭×，绝不点“更新”。
+async function dismissBlockers(cdp) {
+  const c = await cdp.eval(String.raw`(() => {
+    const n=s=>(s||'').replace(/\s+/g,' ').trim();
+    const card=[...document.querySelectorAll('div,section')].find(e=>{const r=e.getBoundingClientRect();const t=n(e.textContent);return r.width>120&&r.width<600&&r.height>40&&r.height<240&&r.bottom>innerHeight-340&&r.x<420&&/可更新|新版本已准备就绪/.test(t);});
+    if(!card)return null;
+    const cb=[...card.querySelectorAll('button,[role="button"],span,div,i,svg')].find(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&r.width<=36&&r.height<=36&&/^(×|✕|✖|x|X|关闭)$/.test(n(e.textContent));});
+    const target=cb||card.querySelector('[class*="close"],[aria-label*="关闭"],[aria-label*="close"]');
+    if(target){const r=target.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};}
+    const r=card.getBoundingClientRect();return {x:Math.round(r.right-14),y:Math.round(r.top+14)};
+  })()`);
+  if(c){ await cdp.clickAt(c.x, c.y); await sleep(600); return true; }
+  return false;
+}
+
 async function clickAvatar(cdp) {
+  await dismissBlockers(cdp);            // 先清掉“更新提示”等遮挡头像的浮层
   const av = await cdp.eval('window.__kuku.avatar()');
   if (!av) throw new Error('未找到左下角账户头像入口');
   await cdp.clickAt(av.x, av.y);
@@ -444,17 +460,27 @@ async function doChats(cdp, port, n, message) {
   return done;
 }
 
-// 打开活动页（点头像→签到领奖→附着 comps iframe），返回其 CDP 或 null。
+// 附着活动页：轮询点“签到领奖”入口并附着 comps iframe，失败重试（菜单/活动异步渲染时更稳）。
+async function attachActivity(cdp, port) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    for (let i = 0; i < 12; i++) { if (await clickActivityEntry(cdp)) break; await sleep(600); }
+    const ac = await attachComps(port, 10000);
+    if (ac) return ac;
+    await dismissOverlay(cdp); await sleep(1000);
+    await clickAvatar(cdp);            // 重试：重新打开菜单
+  }
+  return null;
+}
+// 打开活动页（先点头像，再附着），返回其 CDP 或 null。
 async function openActivity(cdp, port) {
   await clickAvatar(cdp);
-  await clickActivityEntry(cdp);
-  return await attachComps(port, 9000);
+  return await attachActivity(cdp, port);
 }
 
 const CARD_GO_EVAL = (kw) => `(() => {const n=(s)=>(s||'').replace(/\\s+/g,' ').trim();const card=[...document.querySelectorAll('.kuku-task-card')].find(x=>n((x.querySelector('.kuku-task-card__title')||{}).textContent).includes(${JSON.stringify(kw)}));if(!card)return null;const btn=card.querySelector('.kuku-task-card__btn')||card.querySelector('[class*="btn"]');if(!btn)return null;const r=btn.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
 const LOTTERY_BTN_EVAL = String.raw`(() => {const b=document.querySelector('.kuku-btn-box .kuku-btn')||document.querySelector('.kuku-lottery .kuku-btn');if(!b)return null;b.scrollIntoView({block:'center'});const r=b.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
 const REM_EVAL = String.raw`+((document.body.innerText||'').match(/剩余\s*(\d+)\s*次/)||[])[1]||0`;
-const CLOSE_PRIZE_EVAL = String.raw`(() => {const b=document.querySelector('.kuku-reward-btn')||document.querySelector('.kuku-reward-close');if(b){b.click();return true;}return false;})()`;
+const PRIZE_CLOSE_RECT_EVAL = String.raw`(() => {const p=document.querySelector('.kuku-reward-pop');if(!p)return null;const pr=p.getBoundingClientRect();const cs=getComputedStyle(p);if(!(pr.height>10&&cs.display!=='none'&&cs.visibility!=='hidden'&&+cs.opacity>0.1))return null;const b=document.querySelector('.kuku-reward-btn')||document.querySelector('.kuku-reward-close');if(!b)return null;const r=b.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
 const POP_VISIBLE_EVAL = String.raw`(() => {const p=document.querySelector('.kuku-reward-pop');if(!p)return false;const r=p.getBoundingClientRect();const cs=getComputedStyle(p);return r.height>10&&cs.display!=='none'&&cs.visibility!=='hidden'&&+cs.opacity>0.1;})()`;
 
 // 浏览知识广场：点该任务卡“去完成”→跳到知识广场页（计入“每日限1次”，+1 抽奖机会）。
@@ -470,26 +496,34 @@ async function doBrowse(cdp, port) {
   return st;
 }
 
-// 抽奖：反复点抽奖按钮直到“剩余0次”或达上限；以“剩余次数确实减少”计一次成功（.kuku-reward-pop 会隐藏残留在 DOM，不能只判存在）。
+// 关闭中奖弹窗：这些组件不认 JS .click()，必须用真实鼠标事件点“开心收下”。
+async function closePrize(ac) {
+  const p = await ac.eval(PRIZE_CLOSE_RECT_EVAL);
+  if (p) { await ac.clickAt(p.x, p.y); await sleep(900); return true; }
+  return false;
+}
+
+// 抽奖：只要“剩余>0”就继续；每轮先真实点击关掉遗留中奖弹窗，再点抽奖；以“结果弹窗可见”计一次成功。
 async function doLottery(cdp, port, maxDraws) {
   const ac = await openActivity(cdp, port);
   if (!ac) return 'no_activity';
   await ac.eval(`window.scrollTo(0,0)`).catch(() => {});
   let drawn = 0;
   for (let i = 0; i < maxDraws; i++) {
-    await ac.eval(CLOSE_PRIZE_EVAL).catch(() => {}); await sleep(700);   // 先清遗留弹窗
-    let rem = 0;                                                          // 读剩余，带重试等渲染
-    for (let r = 0; r < 5; r++) { rem = await ac.eval(REM_EVAL); if (rem > 0) break; await sleep(600); }
+    await closePrize(ac);                                                // 真实点击关掉遗留中奖弹窗
+    let rem = 0;                                                          // 读剩余（重试等渲染）
+    for (let r = 0; r < 6; r++) { rem = await ac.eval(REM_EVAL); if (rem > 0) break; await sleep(700); }
     if (!rem || rem <= 0) break;
     const btn = await ac.eval(LOTTERY_BTN_EVAL);
     if (!btn) break;
     await sleep(500);
     await ac.clickAt(btn.x, btn.y);
-    for (let k = 0; k < 14; k++) { await sleep(500); if (await ac.eval(POP_VISIBLE_EVAL)) break; }  // 等结果弹窗“可见”
-    await ac.eval(CLOSE_PRIZE_EVAL).catch(() => {});                       // 点“开心收下”
-    await sleep(1000);
-    const rem2 = await ac.eval(REM_EVAL);
-    if (rem2 < rem) drawn++; else break;                                   // 以剩余确实减少为准
+    let popped = false;                                                   // 等中奖弹窗“可见”=抽成了
+    for (let k = 0; k < 16; k++) { await sleep(500); if (await ac.eval(POP_VISIBLE_EVAL)) { popped = true; break; } }
+    if (!popped) break;                                                   // 没弹=没抽成/次数已尽，停
+    drawn++;
+    await closePrize(ac);                                                 // 真实点击“开心收下”
+    await sleep(1200);
   }
   ac.close();
   return drawn;
@@ -645,11 +679,9 @@ async function main() {
       await finish(cdp, result, ac);
       return;
     }
-    await clickActivityEntry(cdp);
-
-    // 附着活动页（kuku.baidu.com/comps/view）
-    ac = await attachComps(OPTS.port);
-    if (!ac) {
+    // 附着活动页（kuku.baidu.com/comps/view）；仅在需要签到时把失败当致命（其余步骤各自会重新打开活动）
+    ac = await attachActivity(cdp, OPTS.port);
+    if (!ac && !OPTS.skipCheckin) {
       result.status = 'activity_not_found';
       result.detail = '未能打开/附着活动页(kuku.baidu.com/comps/view)，入口或界面可能再次改版，需人工确认';
       await finish(cdp, result, ac);
