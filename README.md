@@ -7,6 +7,7 @@
 
 - **每日签到**：连签 7 天解锁网盘 SVIP（+积分/抽奖机会）
 - **与库库AI对话**（每日 3 次）：每次 积分 +10、抽奖机会 +1
+- **召唤任意专家并发起对话**：进专家页 → JS 点「召唤」→ 发消息（默认“只回复数字1”）
 - **浏览知识广场**（每日 1 次）：抽奖机会 +1
 - **抽奖**：消耗所有剩余抽奖机会赢奖品（1.6.22 新 UI 已适配：`.pc-prize-entry` → 弹窗 `.pc-prize-btn`）
 
@@ -44,15 +45,16 @@ uninstall-schedule.bat
 
 3. **活动是内嵌 iframe**：点左下角头像 → 账户菜单 **「签到领奖」** → 打开活动页（新版 1.6.22 为 `https://kuku.baidu.com/operation/activitys/kukuPcSignAct/main`，旧版为 `comps/view/<id>`；脚本按二者之一匹配附着）。活动业务接口都带 App 注入的 `window.jsToken`，**无法脱机**。
 
-4. **四类动作**（脚本用文本语义 + 类名定位，抗改版）：
+4. **五类动作**（脚本用文本语义 + 类名定位，抗改版）：
    | 动作 | 定位方式 |
    | --- | --- |
    | 每日签到 | `.pc-sign-btn`（旧版 `.kuku-sign-in__btn`），点击签到；已签判定 `.pc-sign-btn.is-signed` / `.pc-sign-cell--today-signed`（旧 `.kuku-sign-in__day--todaySigned`） |
    | 与库库聊聊热门话题(对话) | 任务卡 `.pc-kuku-task-card`（旧 `.kuku-task-card`，标题含“聊聊热门话题/对话”）的 `__btn`「去完成」→ 跳到新任务 → 输入框 `.tiptap/.ProseMirror/[contenteditable]` 发消息回车，才计入 `N/3` |
+   | 召唤任意专家并发起对话 | 任务卡（标题含“召唤”）`__btn`「去完成」→ 专家页 → **JS `.click()`** 第一个 `button「召唤」`（真实坐标无效）→ 新任务输入框发消息（默认“只回复数字1”） |
    | 浏览10s知识广场 | 任务卡（标题含“浏览”）的 `__btn`「去完成」→ 跳到 `#/workbench/knowledge-square`（每日1次，+1 抽奖机会） |
    | 抽奖 | `.pc-prize-entry`（有次数时非 `-empty`）→ 弹窗 `.pc-prize-dialog` → 循环 JS 点 `.pc-prize-btn`（转一次）→ 剩余0 后 `.pc-prize-close` 关闭 |
 
-   > ⚠️ 对话任务**必须先在活动页点「去完成」再发消息**才计数；平时直接聊天不归属到活动（实测：点「去完成」后发一条 → `0/3→1/3`）。抽奖/对话/浏览都靠同一个活动 iframe。
+   > ⚠️ 对话任务**必须先在活动页点「去完成」再发消息**才计数；平时直接聊天不归属到活动（实测：点「去完成」后发一条 → `0/3→1/3`）。抽奖/对话/召唤/浏览都靠同一个活动 iframe。
 
 5. 所有点击/输入都通过 CDP 的 `Input.dispatchMouseEvent` / `Input.insertText` / `Input.dispatchKeyEvent` 派发**真实事件**，与参考项目一致（前端框架对 DOM 合成事件不响应）。
 
@@ -73,11 +75,13 @@ node src/auto-checkin.mjs [选项]
 | `--close` | 完成后关闭库库AI 进程（适合无人值守） | 关 |
 | `--message <text>` | 对话任务发送的消息内容 | `回复我【1】 别说别的别思考` |
 | `--chat-times <n>` | 对话任务轮数（活动计"与库库AI对话 N/3"，每轮点"去完成"再发一条） | 3 |
-| `--max-draws <n>` | 抽奖最多消耗次数上限 | 12 |
+| `--max-draws <n>` | 抽奖最多消耗次数上限 | 40 |
 | `--skip-chat` | 跳过对话任务 | 关 |
 | `--skip-checkin` | 跳过每日签到 | 关 |
 | `--skip-browse` | 跳过浏览知识广场 | 关 |
 | `--skip-lottery` | 跳过抽奖 | 关 |
+| `--skip-summon` | 跳过召唤专家 | 关 |
+| `--summon-message <text>` | 召唤后发送的内容 | `只回复数字1` |
 | `--feishu <url>` | 结果推送飞书群机器人 webhook（也可 config.json / 环境变量） | 不推送 |
 | `--no-push` | 只执行、不推送飞书 | 关 |
 | `--help` | 查看全部参数 | — |

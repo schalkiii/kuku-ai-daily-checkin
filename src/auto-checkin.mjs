@@ -70,9 +70,11 @@ const OPTS = {
   skipCheckin: !!argv['skip-checkin'],
   skipBrowse: !!argv['skip-browse'],
   skipLottery: !!argv['skip-lottery'],
+  skipSummon: !!argv['skip-summon'],
   maxDraws: Number(pick('max-draws', 'KUKUCHECKIN_MAX_DRAWS', 'maxDraws', '40')),
   chatTimes: Number(pick('chat-times', 'KUKUCHECKIN_CHAT_TIMES', 'chatTimes', '3')),  // 活动“与库库AI对话 N/3”，每轮需先点“去完成”再发消息才计数
   message: pick('message', 'KUKUCHECKIN_CHAT_MESSAGE', 'chatMessage', '回复我【1】 别说别的别思考'),
+  summonMessage: pick('summon-message', 'KUKUCHECKIN_SUMMON_MESSAGE', 'summonMessage', '只回复数字1'),
 };
 
 // 抽奖开关：1.6.22 已重新逆向并适配（pc-prize-entry / pc-prize-dialog / pc-prize-btn，JS .click 可触发），已恢复。
@@ -465,6 +467,30 @@ async function doChats(cdp, port, n, message) {
   return done;
 }
 
+// 召唤任意专家并发起对话：活动点该卡「去完成」→专家页 → JS .click() 第一个「召唤」按钮（真实坐标无效）→ 新任务输入框发消息。
+async function doSummon(cdp, port, message) {
+  const ac = await openActivity(cdp, port);
+  if (!ac) return 'no_activity';
+  for (let i = 0; i < 6; i++) { await ac.eval(COMPS_SCROLL_EVAL); await sleep(300); }
+  // 该任务已完成（按钮图标 btn_done）则直接返回
+  const done = await ac.eval(`(() => {const n=s=>(s||'').replace(/\s+/g,' ').trim();const card=[...document.querySelectorAll('.pc-kuku-task-card')].find(x=>n((x.querySelector('.pc-kuku-task-card__title')||{}).textContent).includes('召唤'));if(!card)return null;const btn=card.querySelector('.pc-kuku-task-card__btn');return !!(btn && /btn_done/.test(btn.getAttribute('src')||''));})()`);
+  if (done === true) { ac.close(); return 'already'; }
+  const b = await ac.eval(CARD_GO_EVAL('召唤'));
+  if (b && b.x) await ac.clickAt(b.x, b.y);   // 跳到专家页
+  ac.close();
+  await sleep(3000);
+  let clicked = false;                                  // 专家页：JS .click “召唤”
+  for (let i = 0; i < 12; i++) {
+    clicked = await cdp.eval(`(() => {const b=[...document.querySelectorAll('button')].find(x=>(x.textContent||'').trim()==='召唤'&&x.getBoundingClientRect().width>0);if(!b)return false;b.click();return true;})()`);
+    if (clicked) break;
+    await sleep(600);
+  }
+  if (!clicked) return 'no_summon_btn';
+  await sleep(3000);                                    // 等新任务页与输入框
+  const r = await doConversation(cdp, message);
+  return r.status === 'sent' ? 'summoned_chat' : ('summon_' + r.status);
+}
+
 // 附着活动页：轮询点“签到领奖”入口并附着 comps iframe，失败重试（菜单/活动异步渲染时更稳）。
 async function attachActivity(cdp, port) {
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -669,6 +695,7 @@ async function main() {
     status: 'unknown',
     checkin: null,   // 每日签到（连签送 SVIP）
     chat: null,      // 与库库AI对话（积分+10/次）
+    summon: null,    // 召唤任意专家并发起对话
     browse: null,    // 浏览知识广场（+1 抽奖机会）
     lottery: null,   // 抽奖（消耗剩余次数）
     detail: '',
@@ -705,6 +732,8 @@ async function main() {
       const sent = await doChats(cdp, OPTS.port, OPTS.chatTimes, OPTS.message);
       result.chat = sent > 0 ? ('sent_' + sent) : 'none';
     }
+    // ---- 召唤任意专家并发起对话 ----
+    if (!OPTS.skipSummon) result.summon = await doSummon(cdp, OPTS.port, OPTS.summonMessage);
     // ---- 浏览知识广场 ----
     if (!OPTS.skipBrowse) result.browse = await doBrowse(cdp, OPTS.port);
     // ---- 抽奖（暂停中：见 LOTTERY_PAUSED；升级稳定版后重做）----
@@ -713,6 +742,7 @@ async function main() {
     const notes = [];
     if (!OPTS.skipCheckin) notes.push('签到:' + result.checkin);
     if (!OPTS.skipChat) notes.push('对话:' + result.chat);
+    if (!OPTS.skipSummon) notes.push('召唤:' + result.summon);
     if (!OPTS.skipBrowse) notes.push('浏览:' + result.browse);
     if (!OPTS.skipLottery && !LOTTERY_PAUSED) notes.push('抽奖:' + result.lottery);
     result.detail = notes.join('；');
@@ -755,7 +785,7 @@ async function report(result) {
   console.log('\n[RESULT] ' + JSON.stringify(result, null, 2));
   if (!OPTS.noPush && OPTS.feishu) {
     const emoji = result.status === 'success' ? '✅' : result.status === 'already_done' ? 'ℹ️' : result.status === 'partial' ? '🟡' : '❌';
-    const text = `${emoji} 库库AI 自动签到\n状态: ${result.status}\n签到: ${result.checkin || '-'}\n对话: ${result.chat || '-'}\n浏览: ${result.browse || '-'}\n抽奖: ${result.lottery || '-'}\n详情: ${result.detail}\n时间: ${result.time}`;
+    const text = `${emoji} 库库AI 自动签到\n状态: ${result.status}\n签到: ${result.checkin || '-'}\n对话: ${result.chat || '-'}\n召唤: ${result.summon || '-'}\n浏览: ${result.browse || '-'}\n抽奖: ${result.lottery || '-'}\n详情: ${result.detail}\n时间: ${result.time}`;
     await pushFeishu(OPTS.feishu, text);
   }
 }
@@ -778,6 +808,8 @@ function printHelp() {
   --skip-checkin               跳过每日签到
   --skip-browse                跳过浏览知识广场
   --skip-lottery               跳过抽奖
+  --skip-summon                跳过召唤专家
+  --summon-message <text>      召唤专家后发送的内容（默认：只回复数字1）
   --feishu <url>               签到结果推送飞书群机器人 webhook（也可 config.json / 环境变量）
   --no-push                    只执行、不推送飞书
   --help                       显示本帮助

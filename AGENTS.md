@@ -2,7 +2,7 @@
 
 ## 定位
 本项目用 **CDP（Chrome DevTools Protocol）模拟 UI**，为库库AI PC 客户端（GenFlowPro，Electron）
-自动完成 2026-10 改版后的「金秋厚礼」活动：每日签到 + 与库库聊聊热门话题×3 + 浏览10s知识广场 + 抽奖（1.6.22 已适配 pc-* 类名）。零第三方依赖，需 Node ≥ 18。
+自动完成 2026-10 改版后的「金秋厚礼」活动：每日签到 + 与库库聊聊热门话题×3 + 召唤任一专家并发起对话 + 浏览10s知识广场 + 抽奖（1.6.22 已适配 pc-* 类名）。零第三方依赖，需 Node ≥ 18。
 
 ## 怎么跑
 ```bat
@@ -25,6 +25,7 @@ install-schedule.bat 10:10                :: 注册每日计划任务（KukuDail
 - 活动是账户菜单点「签到领奖」打开的内嵌 iframe：1.6.22 为 `kuku.baidu.com/operation/activitys/kukuPcSignAct/main`（类名 `pc-*`），旧版为 `comps/view/<id>`；脚本按二者之一匹配附着（`/json`）。
 - 每日签到：点 `.pc-sign-btn`（旧 `.kuku-sign-in__btn`）；已签判定 `.pc-sign-btn.is-signed` / `.pc-sign-cell--today-signed`（旧 `.kuku-sign-in__day--todaySigned`）。
 - 与库库聊聊热门话题(对话)：**必须先点该 `.pc-kuku-task-card` 的 `__btn`「去完成」**(关活动跳新任务)→再发消息→才计入 `N/3`（实测 0/3→1/3）。默认 prompt「回复我【1】 别说别的别思考」省 token。
+- 召唤任意专家并发起对话：任务卡「去完成」→专家页；页内 `button「召唤」` 必须用 **JS `.click()`**（真实坐标无效）→跳到 new-task 输入框发消息；默认消息「只回复数字1」(`--summon-message` 可改)。已完成时卡片 icon 为 `btn_done`（脚本直接返回 already）。
 - 浏览10s知识广场：点该任务卡 `__btn`「去完成」→跳 `#/workbench/knowledge-square`（每日1次，+1 抽奖机会）。
 - 抽奖（1.6.22）：`.pc-prize-entry`（有次数时非 `-empty`）→弹窗 `.pc-prize-dialog` →循环 **JS `.click()`** 点 `.pc-prize-btn`（真实坐标不生效）→剩余0 后 `.pc-prize-close`。剩余数取 `.pc-prize-btn-count` 的“剩余N次”。
 
