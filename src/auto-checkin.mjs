@@ -5,7 +5,7 @@
  * 参考 https://github.com/schalkiii/trae-daily-checkin 的实现思路，
  * 针对本地库库AI PC 客户端（Electron）通过 Chrome DevTools Protocol (CDP) 操控 DOM。
  *
- * 活动（2026-10 改版；1.6.22 重构为 operation/activitys/kukuPcSignAct/main，类名 pc-*）：账户菜单点「签到领奖」打开活动页，本脚本自动做满：
+ * 活动（2026-10 改版；1.6.30 起入口改为首页右上角活动浮标 .activity-banner，点击后主窗口内嵌 iframe）：
  *   1) 每日签到：连签 7 天解锁网盘 SVIP（1.6.22+ 点 .pc-sign-btn；旧版 .kuku-sign-in__btn）
  *   2) 与库库AI对话 ×3：先点任务卡「去完成」再发消息才计入（积分 +10/次 + 抽奖机会）
  *   3) 浏览知识广场：点「去完成」跳知识广场（每日1次，+1 抽奖机会）
@@ -297,6 +297,9 @@ window.__kuku = (() => {
   const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
   function center(r) { return { x: Math.round(r[0] + r[2] / 2), y: Math.round(r[1] + r[3] / 2) }; }
   function avatar() {
+    // 1.6.30：左下角账户区有 data-testid，优先用它（侧栏会员图标也是小图，避免点错）
+    const trigger = document.querySelector('[data-testid="user-profile-trigger"]');
+    if (trigger && vis(trigger)) return center(rect(trigger));
     const imgs = [...document.querySelectorAll('img')].filter((el) => {
       const r = el.getBoundingClientRect();
       return vis(el) && r.width <= 48 && r.bottom > window.innerHeight - 120 && r.x < 140 &&
@@ -323,8 +326,11 @@ window.__kuku = (() => {
   }
   function menuOpen() { const t = tasks(); return !!(t.login || t.conv); }
   function loginPrompt() {
-    // 判断是否处于未登录（出现登录/扫码入口，且没有任务行）
-    const body = n(document.body.textContent);
+    // 1.6.30：侧栏账户区未登录时只剩「登录」入口（没有「签到」按钮）
+    const auth = document.querySelector('[data-testid="sidebar-auth-entry"]');
+    const at = n(auth ? auth.textContent : '');
+    if (at && /登录|扫码/.test(at) && !/签到/.test(at)) return true;
+    // 旧版：出现登录/扫码入口，且没有任务行
     if (menuOpen()) return false;
     const hasMenu = [...document.querySelectorAll('[data-state="open"],[role="menu"],[role="dialog"]')]
       .some((el) => { const r = el.getBoundingClientRect(); return r.width > 120 && r.height > 80; });
@@ -363,22 +369,17 @@ async function dismissBlockers(cdp) {
   return false;
 }
 
-async function clickAvatar(cdp) {
-  await dismissBlockers(cdp);            // 先清掉“更新提示”等遮挡头像的浮层
-  const av = await cdp.eval('window.__kuku.avatar()');
-  if (!av) throw new Error('未找到左下角账户头像入口');
-  await cdp.clickAt(av.x, av.y);
-  await sleep(1200);
-}
-
-// 账户菜单里的“签到领奖”行会打开 comps 活动页（注意“每日领奖”是积分明细，别点错）。
-async function clickActivityEntry(cdp) {
+// 1.6.30+：活动入口改为首页(new-task)右上角活动浮标 .activity-banner（按钮内是活动图），
+// 点击后活动页作为 OOPIF iframe 嵌在主窗口内（URL 仍为 operation/activitys/kukuPcSignAct/main）。
+async function clickActivityBanner(cdp) {
   const c = await cdp.eval(String.raw`(() => {
-    const n=(s)=>(s||'').replace(/\s+/g,' ').trim();
-    const el=[...document.querySelectorAll('button,a,[role="button"],div,span,li')].filter(e=>{const r=e.getBoundingClientRect();return r.width>0&&r.height>0&&r.height<80&&/签到领奖|签到领取|立即签到|每日签到/.test(n(e.textContent));}).sort((a,b)=>a.getBoundingClientRect().height-b.getBoundingClientRect().height)[0];
-    if(!el)return null;const r=el.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};
+    const e = document.querySelector('.activity-banner, [data-testid="new-task-activity-banner"]');
+    if (!e) return null;
+    const r = e.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return null;
+    return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };
   })()`);
-  if (c) { await cdp.clickAt(c.x, c.y); await sleep(1500); }
+  if (c) { await cdp.clickAt(c.x, c.y); await sleep(1200); }
   return !!c;
 }
 
@@ -392,7 +393,7 @@ async function dismissOverlay(cdp) {
   await sleep(400);
 }
 
-// 活动是内嵌在账户弹窗里的 kuku.baidu.com/comps/view/<id> iframe（独立 CDP target）。
+// 活动是主窗口内的 kuku.baidu.com iframe（独立 CDP target，1.6.30 为 OOPIF）。
 async function findCompsTarget(port, timeoutMs = 12000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -442,23 +443,53 @@ async function doSignIn(ac) {
   return 'no_sign_control';
 }
 
-// 对话任务：活动要求先点“与库库AI对话”卡的“去完成”（会关闭活动并跳到新任务），再发消息才计入 N/3。
-const COMPS_SCROLL_EVAL = String.raw`(() => {const tl=document.querySelector('.pc-kuku-task-list, .kuku-task-list');if(tl)tl.scrollIntoView({block:'center'});const sc=[...document.querySelectorAll('*')].find(e=>e.scrollHeight>e.clientHeight+100&&/auto|scroll/.test(getComputedStyle(e).overflowY));if(sc)sc.scrollTop+=500;else window.scrollBy(0,500);})()`;
-const CHAT_GO_EVAL = String.raw`(() => {const n=(s)=>(s||'').replace(/\s+/g,' ').trim();const card=[...document.querySelectorAll('.pc-kuku-task-card, .kuku-task-card')].find(x=>/对话|热门话题|聊聊/.test(n((x.querySelector('.pc-kuku-task-card__title, .kuku-task-card__title')||{}).textContent)));if(!card)return null;const btn=card.querySelector('.pc-kuku-task-card__btn, .kuku-task-card__btn')||card.querySelector('[class*="btn"]');if(!btn)return null;const r=btn.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
+// 任务卡「去完成」：新 UI 的按钮是 IMG（btn_todo.png / btn_done.png），需先滚动到可视区再点。
+const CARD_INFO_EVAL = (kw) => `(() => {const n=(s)=>(s||'').replace(/\\s+/g,' ').trim();const card=[...document.querySelectorAll('.pc-kuku-task-card, .kuku-task-card')].find(x=>n((x.querySelector('.pc-kuku-task-card__title, .kuku-task-card__title')||{}).textContent).includes(${JSON.stringify(kw)}));if(!card)return {err:'no_card'};card.scrollIntoView({block:'center'});const btn=card.querySelector('.pc-kuku-task-card__btn, .kuku-task-card__btn')||card.querySelector('[class*="btn"]');if(!btn)return {err:'no_btn'};const src=(btn.getAttribute&&btn.getAttribute('src'))||'';const r=btn.getBoundingClientRect();return {title:n((card.querySelector('.pc-kuku-task-card__title, .kuku-task-card__title')||{}).textContent),progress:n((card.querySelector('.pc-kuku-task-card__progress')||{}).textContent),done:/btn_done/.test(src),rect:[Math.round(r.x),Math.round(r.y),Math.round(r.width),Math.round(r.height)],vw:innerWidth,vh:innerHeight,x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
+
+async function clickTaskGo(ac, kw) {
+  let info = await ac.eval(CARD_INFO_EVAL(kw));
+  if (!info || info.err) return (info && info.err) || 'no_card';
+  if (info.done) return 'already';
+  // 滚动后布局可能还在动，重取一次位置
+  await sleep(400);
+  info = await ac.eval(CARD_INFO_EVAL(kw));
+  if (!info || info.err) return (info && info.err) || 'no_card';
+  if (info.done) return 'already';
+  if (!(info.x > 0 && info.x < info.vw && info.y > 0 && info.y < info.vh)) return 'out_of_view';
+  await ac.clickAt(info.x, info.y);   // 点“去完成”：关闭活动并跳到对应页面
+  return 'clicked';
+}
+
+// 等待活动 iframe 关闭（点“去完成”后活动会收起），用于确认点击生效。
+async function waitActivityClosed(port, timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const list = await httpJson(`http://127.0.0.1:${port}/json`);
+      if (!list.some((t) => /(comps\/view|operation\/activitys)/.test(t.url || ''))) return true;
+    } catch { /* ignore */ }
+    await sleep(400);
+  }
+  return false;
+}
 
 async function doChats(cdp, port, n, message) {
   let done = 0;
   for (let k = 0; k < n; k++) {
-    await clickAvatar(cdp);            // 开账户菜单
-    await clickActivityEntry(cdp);     // 签到领奖 -> 打开 comps 活动
-    const ac = await attachComps(port, 8000);
-    if (ac) {
-      for (let i = 0; i < 6; i++) { await ac.eval(COMPS_SCROLL_EVAL); await sleep(350); }
-      const b = await ac.eval(CHAT_GO_EVAL);
-      if (b && b.x) await ac.clickAt(b.x, b.y);   // 点“去完成”：关闭活动、回到新任务
-      ac.close();
-      await sleep(2500);
+    const ac = await openActivity(cdp, port);   // 打开活动（首页活动浮标）
+    if (!ac) break;
+    let st = await clickTaskGo(ac, '热门话题');
+    if (st === 'clicked' && !(await waitActivityClosed(port))) {
+      // 可能被残留弹窗/遮罩挡住：关掉弹窗再点一次
+      await ac.eval(`(() => {const x=document.querySelector('.pc-prize-close');if(x)x.click();})()`).catch(() => {});
+      await sleep(600);
+      st = await clickTaskGo(ac, '热门话题');
+      if (st === 'clicked') await waitActivityClosed(port);
     }
+    ac.close();
+    if (st === 'already') return done > 0 ? done : 'already';   // 今日 3/3 已完成
+    if (st !== 'clicked') break;
+    await sleep(1500);
     const r = await doConversation(cdp, message);
     if (r.status !== 'sent') break;
     done++;
@@ -471,13 +502,10 @@ async function doChats(cdp, port, n, message) {
 async function doSummon(cdp, port, message) {
   const ac = await openActivity(cdp, port);
   if (!ac) return 'no_activity';
-  for (let i = 0; i < 6; i++) { await ac.eval(COMPS_SCROLL_EVAL); await sleep(300); }
-  // 该任务已完成（按钮图标 btn_done）则直接返回
-  const done = await ac.eval(`(() => {const n=s=>(s||'').replace(/\s+/g,' ').trim();const card=[...document.querySelectorAll('.pc-kuku-task-card')].find(x=>n((x.querySelector('.pc-kuku-task-card__title')||{}).textContent).includes('召唤'));if(!card)return null;const btn=card.querySelector('.pc-kuku-task-card__btn');return !!(btn && /btn_done/.test(btn.getAttribute('src')||''));})()`);
-  if (done === true) { ac.close(); return 'already'; }
-  const b = await ac.eval(CARD_GO_EVAL('召唤'));
-  if (b && b.x) await ac.clickAt(b.x, b.y);   // 跳到专家页
+  const st = await clickTaskGo(ac, '召唤');
   ac.close();
+  if (st === 'already') return 'already';
+  if (st !== 'clicked') return st;
   await sleep(3000);
   let clicked = false;                                  // 专家页：JS .click “召唤”
   for (let i = 0; i < 12; i++) {
@@ -491,41 +519,40 @@ async function doSummon(cdp, port, message) {
   return r.status === 'sent' ? 'summoned_chat' : ('summon_' + r.status);
 }
 
-// 附着活动页：轮询点“签到领奖”入口并附着 comps iframe，失败重试（菜单/活动异步渲染时更稳）。
-async function attachActivity(cdp, port) {
+// 打开活动页：活动已在则复用；否则回到 new-task 首页点活动浮标（.activity-banner）并附着 iframe。
+async function openActivity(cdp, port) {
+  const existing = await attachComps(port, 800);   // 已打开则直接复用
+  if (existing) {
+    // 清掉可能残留的抽奖弹窗（否则会盖住任务卡，点击不生效）
+    await existing.eval(`(() => {const x=document.querySelector('.pc-prize-close');if(x)x.click();})()`).catch(() => {});
+    await existing.eval('window.scrollTo(0,0)').catch(() => {});
+    return existing;
+  }
+  await dismissBlockers(cdp);
+  // 活动浮标只在 new-task 首页渲染（注意会话页 hash 为 new-task?session_id=...，不能只判子串）
+  const h0 = (await cdp.eval('window.__kuku.hash()')) || '';
+  if (!/^#\/workbench\/new-task\/?$/.test(h0)) {
+    await cdp.eval(`location.hash = '#/workbench/new-task'`);
+    await sleep(1800);
+  }
   for (let attempt = 0; attempt < 3; attempt++) {
-    for (let i = 0; i < 12; i++) { if (await clickActivityEntry(cdp)) break; await sleep(600); }
+    for (let i = 0; i < 12; i++) { if (await clickActivityBanner(cdp)) break; await sleep(500); }
     const ac = await attachComps(port, 10000);
     if (ac) return ac;
-    await dismissOverlay(cdp); await sleep(1000);
-    await clickAvatar(cdp);            // 重试：重新打开菜单
+    await sleep(1000);
   }
   return null;
 }
-// 打开活动页（先点头像，再附着），返回其 CDP 或 null。
-async function openActivity(cdp, port) {
-  await clickAvatar(cdp);
-  return await attachActivity(cdp, port);
-}
-
-const CARD_GO_EVAL = (kw) => `(() => {const n=(s)=>(s||'').replace(/\\s+/g,' ').trim();const card=[...document.querySelectorAll('.pc-kuku-task-card, .kuku-task-card')].find(x=>n((x.querySelector('.pc-kuku-task-card__title, .kuku-task-card__title')||{}).textContent).includes(${JSON.stringify(kw)}));if(!card)return null;const btn=card.querySelector('.pc-kuku-task-card__btn, .kuku-task-card__btn')||card.querySelector('[class*="btn"]');if(!btn)return null;const r=btn.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
-const LOTTERY_BTN_EVAL = String.raw`(() => {const b=document.querySelector('.kuku-btn-box .kuku-btn')||document.querySelector('.kuku-lottery .kuku-btn');if(!b)return null;b.scrollIntoView({block:'center'});const r=b.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
-const REM_EVAL = String.raw`+((document.body.innerText||'').match(/剩余\s*(\d+)\s*次/)||[])[1]||0`;
-const PRIZE_CLOSE_RECT_EVAL = String.raw`(() => {const p=document.querySelector('.kuku-reward-pop');if(!p)return null;const pr=p.getBoundingClientRect();const cs=getComputedStyle(p);if(!(pr.height>10&&cs.display!=='none'&&cs.visibility!=='hidden'&&+cs.opacity>0.1))return null;const b=document.querySelector('.kuku-reward-btn')||document.querySelector('.kuku-reward-close');if(!b)return null;const r=b.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`;
-const POP_VISIBLE_EVAL = String.raw`(() => {const p=document.querySelector('.kuku-reward-pop');if(!p)return false;const r=p.getBoundingClientRect();const cs=getComputedStyle(p);return r.height>10&&cs.display!=='none'&&cs.visibility!=='hidden'&&+cs.opacity>0.1;})()`;
-
 // 浏览知识广场：点该任务卡“去完成”→跳到知识广场页（计入“每日限1次”，+1 抽奖机会）。
 async function doBrowse(cdp, port) {
   const ac = await openActivity(cdp, port);
   if (!ac) return 'no_activity';
-  for (let i = 0; i < 6; i++) { await ac.eval(COMPS_SCROLL_EVAL); await sleep(300); }
-  const b = await ac.eval(CARD_GO_EVAL('浏览'));
-  let st = 'no_btn';
-  if (b && b.x) { await ac.clickAt(b.x, b.y); st = 'browsed'; }
+  const st = await clickTaskGo(ac, '浏览');
   ac.close();
-  if (st === 'browsed') await sleep(10500);   // 任务要求“浏览10s知识广场”，在知识广场停留10s再返回
-  else await sleep(1500);
-  return st;
+  if (st === 'already') return 'already';
+  if (st !== 'clicked') return st;
+  await sleep(10500);   // 任务要求“浏览10s知识广场”，在知识广场停留10s
+  return 'browsed';
 }
 
 // 抽奖（1.6.22+）：点 .pc-prize-entry 开弹窗（有次数时非 -empty，会先自动转一次）→ 循环点 .pc-prize-btn（JS .click 可触发）→ 剩余0/不可点为止 → .pc-prize-close 关闭。
@@ -533,14 +560,25 @@ async function doLottery(cdp, port, maxDraws) {
   const ac = await openActivity(cdp, port);
   if (!ac) return 'no_activity';
   await ac.eval(`window.scrollTo(0,0)`).catch(() => {});
-  const entry = await ac.eval(String.raw`(() => {const e=document.querySelector('.pc-prize-entry');if(!e)return null;const r=e.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),empty:/-empty/.test(e.className)};})()`);
+  const entry = await ac.eval(String.raw`(() => {const e=document.querySelector('.pc-prize-entry');if(!e)return null;const r=e.getBoundingClientRect();const t=(e.textContent||'').replace(/\s+/g,' ').trim();const m=t.match(/剩\s*(\d+)/);return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),empty:/-empty/.test(e.className),rem:m?+m[1]:0,txt:t.slice(0,30)};})()`);
   if (!entry) { ac.close(); return 'no_entry'; }
   if (entry.empty) { ac.close(); return 'no_chance'; }
-  await ac.clickAt(entry.x, entry.y);                 // 打开抽奖弹窗
-  await sleep(1500);
+  await ac.clickAt(entry.x, entry.y);                 // 打开抽奖弹窗（会先自动抽一次）
+  await sleep(1800);
   const REM2 = String.raw`(() => {const c=document.querySelector('.pc-prize-btn-count');const b=document.querySelector('.pc-prize-btn');const t=((c&&c.textContent)||'')+' '+((b&&b.textContent)||'');const m=t.match(/剩余\s*(\d+)/);return m?+m[1]:0;})()`;
   const BTNSTATE = String.raw`(() => {const b=document.querySelector('.pc-prize-btn');return b?{cls:b.className,ok:!/is-running|is-disabled/.test(b.className)}:{ok:false};})()`;
   let drawn = 0;
+  // 打开弹窗会先自动抽一次：以“剩余数确实减少”计这一次
+  if (entry.rem > 0) {
+    for (let r = 0; r < 10; r++) {
+      const rem = await ac.eval(String.raw`(() => {const b=document.querySelector('.pc-prize-btn');if(!b)return null;const c=document.querySelector('.pc-prize-btn-count');const t=((c&&c.textContent)||'')+' '+((b&&b.textContent)||'');const m=t.match(/剩余\s*(\d+)/);return m?+m[1]:0;})()`);
+      if (rem !== null) {
+        if (rem === 0) { drawn += entry.rem; break; }
+        if (rem < entry.rem) { drawn += entry.rem - rem; break; }
+      }
+      await sleep(600);
+    }
+  }
   for (let i = 0; i < maxDraws; i++) {
     let rem = 0;
     for (let r = 0; r < 8; r++) { rem = await ac.eval(REM2); if (rem > 0) break; await sleep(600); }
@@ -563,13 +601,29 @@ async function doLottery(cdp, port, maxDraws) {
   return drawn;
 }
 
-// 完成一次对话：聚焦输入框 -> 输入消息 -> 回车 -> 等待会话创建
+// 新任务输入框会预填推荐语（如“做一份三天两晚的旅行计划表”），发消息前先清空。
+async function clearEditor(cdp) {
+  await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'a', code: 'KeyA', windowsVirtualKeyCode: 65, modifiers: 2 });
+  await sleep(150);
+  await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
+  await sleep(200);
+  if (await cdp.eval('window.__kuku.editorText()')) {
+    await cdp.eval(`(() => {const el=document.querySelector('.tiptap,.ProseMirror,[contenteditable="true"]');if(!el)return;el.focus();document.execCommand('selectAll');document.execCommand('delete');})()`);
+    await sleep(200);
+  }
+}
+
+// 完成一次对话：聚焦输入框 -> 清空预填 -> 输入消息 -> 回车 -> 等待会话创建
 async function doConversation(cdp, message) {
   await closeMenu(cdp);
-  const input = await cdp.eval('window.__kuku.input()');
+  let input = null;
+  for (let i = 0; i < 10; i++) { input = await cdp.eval('window.__kuku.input()'); if (input) break; await sleep(600); }
   if (!input) return { status: 'input_not_found' };
   await cdp.clickAt(input.x, input.y);
   await sleep(400);
+  await clearEditor(cdp);
   await cdp.insertText(message);
   await sleep(400);
   const typed = await cdp.eval('window.__kuku.editorText()');
@@ -706,19 +760,19 @@ async function main() {
   try {
     cdp = await ensureConnection();
 
-    // 点左下角头像 -> 弹出账户菜单；再点“签到领奖”行打开 comps 活动页
-    await clickAvatar(cdp);
+    // 未登录检测（1.6.30 侧栏账户区：只有「登录」没有「签到」时视为未登录）
+    await dismissBlockers(cdp);
     if (await cdp.eval('window.__kuku.loginPrompt()')) {
       result.status = 'not_logged_in';
       result.detail = '库库AI 未登录，需先手动登录后再运行';
       await finish(cdp, result, ac);
       return;
     }
-    // 附着活动页（kuku.baidu.com/comps/view）；仅在需要签到时把失败当致命（其余步骤各自会重新打开活动）
-    ac = await attachActivity(cdp, OPTS.port);
+    // 打开活动页（1.6.30：首页活动浮标 .activity-banner）；仅在需要签到时把失败当致命（其余步骤各自会重新打开活动）
+    ac = await openActivity(cdp, OPTS.port);
     if (!ac && !OPTS.skipCheckin) {
       result.status = 'activity_not_found';
-      result.detail = '未能打开/附着活动页(kuku.baidu.com/comps/view)，入口或界面可能再次改版，需人工确认';
+      result.detail = '未能打开/附着活动页(kuku.baidu.com/operation/activitys)，入口或界面可能再次改版，需人工确认';
       await finish(cdp, result, ac);
       return;
     }
@@ -730,7 +784,7 @@ async function main() {
     // ---- 对话任务（每轮点"去完成"再发消息）----
     if (!OPTS.skipChat) {
       const sent = await doChats(cdp, OPTS.port, OPTS.chatTimes, OPTS.message);
-      result.chat = sent > 0 ? ('sent_' + sent) : 'none';
+      result.chat = sent === 'already' ? 'already' : sent > 0 ? ('sent_' + sent) : 'none';
     }
     // ---- 召唤任意专家并发起对话 ----
     if (!OPTS.skipSummon) result.summon = await doSummon(cdp, OPTS.port, OPTS.summonMessage);
@@ -748,11 +802,26 @@ async function main() {
     result.detail = notes.join('；');
 
     if (!OPTS.skipCheckin) {
-      if (result.checkin === 'signed') result.status = 'success';
-      else if (result.checkin === 'already_signed') result.status = 'already_done';
-      else result.status = 'failed';
+      result.status = result.checkin === 'signed' ? 'success' : result.checkin === 'already_signed' ? 'already_done' : 'failed';
     } else {
       result.status = (!OPTS.skipChat && String(result.chat).startsWith('sent')) ? 'success' : 'skipped';
+    }
+
+    // 任一已启用任务未完成 -> partial（避免签到成功就掩盖对话/浏览失败）
+    const problems = [];
+    if (!OPTS.skipCheckin && !['signed', 'already_signed'].includes(result.checkin)) problems.push('签到:' + result.checkin);
+    if (!OPTS.skipChat && !/^sent_[1-9]\d*$/.test(String(result.chat)) && result.chat !== 'already') problems.push('对话:' + result.chat);
+    if (!OPTS.skipSummon && !['summoned_chat', 'already'].includes(result.summon)) problems.push('召唤:' + result.summon);
+    if (!OPTS.skipBrowse && !['browsed', 'already'].includes(result.browse)) problems.push('浏览:' + result.browse);
+    if (!OPTS.skipLottery && !LOTTERY_PAUSED) {
+      const lv = String(result.lottery);
+      if (!/^drawn_\d+$/.test(lv) && lv !== 'no_chance' && lv !== 'no_entry') problems.push('抽奖:' + result.lottery);
+    }
+    if (problems.length) {
+      result.status = 'partial';
+      result.detail += '；未完成: ' + problems.join('，');
+    } else if (OPTS.skipCheckin) {
+      result.status = 'success';
     }
     await finish(cdp, result, ac);
   } catch (e) {

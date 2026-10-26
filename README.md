@@ -43,18 +43,18 @@ uninstall-schedule.bat
    随后 `http://127.0.0.1:9333/json` 可看到主窗口 page：
    `file:///.../app.asar/out/renderer/index.html#/workbench/new-task`
 
-3. **活动是内嵌 iframe**：点左下角头像 → 账户菜单 **「签到领奖」** → 打开活动页（新版 1.6.22 为 `https://kuku.baidu.com/operation/activitys/kukuPcSignAct/main`，旧版为 `comps/view/<id>`；脚本按二者之一匹配附着）。活动业务接口都带 App 注入的 `window.jsToken`，**无法脱机**。
+3. **活动是内嵌 iframe**：1.6.30 起入口改为**首页右上角活动浮标**（`.activity-banner`，真实图标“连签得SVIP卡”）→ 主窗口内嵌 `https://kuku.baidu.com/operation/activitys/kukuPcSignAct/main`（旧版 1.6.22 为账户菜单「签到领奖」，更旧为 `comps/view/<id>`；脚本按 URL 匹配附着）。活动业务接口都带 App 注入的 `window.jsToken`，**无法脱机**。
 
 4. **五类动作**（脚本用文本语义 + 类名定位，抗改版）：
    | 动作 | 定位方式 |
    | --- | --- |
    | 每日签到 | `.pc-sign-btn`（旧版 `.kuku-sign-in__btn`），点击签到；已签判定 `.pc-sign-btn.is-signed` / `.pc-sign-cell--today-signed`（旧 `.kuku-sign-in__day--todaySigned`） |
-   | 与库库聊聊热门话题(对话) | 任务卡 `.pc-kuku-task-card`（旧 `.kuku-task-card`，标题含“聊聊热门话题/对话”）的 `__btn`「去完成」→ 跳到新任务 → 输入框 `.tiptap/.ProseMirror/[contenteditable]` 发消息回车，才计入 `N/3` |
+   | 与库库聊聊热门话题(对话) | 任务卡 `.pc-kuku-task-card`（标题含“热门话题/聊聊”）的 `__btn`（IMG，`btn_todo.png`/`btn_done.png`）→ 先 `scrollIntoView` 再点「去完成」→ 到新任务输入框（**先清空预填推荐语**）发消息回车，才计入 `N/3` |
    | 召唤任意专家并发起对话 | 任务卡（标题含“召唤”）`__btn`「去完成」→ 专家页 → **JS `.click()`** 第一个 `button「召唤」`（真实坐标无效）→ 新任务输入框发消息（默认“只回复数字1”） |
    | 浏览10s知识广场 | 任务卡（标题含“浏览”）的 `__btn`「去完成」→ 跳到 `#/workbench/knowledge-square`（每日1次，+1 抽奖机会） |
-   | 抽奖 | `.pc-prize-entry`（有次数时非 `-empty`）→ 弹窗 `.pc-prize-dialog` → 循环 JS 点 `.pc-prize-btn`（转一次）→ 剩余0 后 `.pc-prize-close` 关闭 |
+   | 抽奖 | `.pc-prize-entry`（有次数时非 `-empty`，文案“剩N次”）→ 点击打开弹窗（**打开时会先自动抽一次**）→ 循环 JS 点 `.pc-prize-btn`（转一次）→ 剩余0 后 `.pc-prize-close` 关闭 |
 
-   > ⚠️ 对话任务**必须先在活动页点「去完成」再发消息**才计数；平时直接聊天不归属到活动（实测：点「去完成」后发一条 → `0/3→1/3`）。抽奖/对话/召唤/浏览都靠同一个活动 iframe。
+   > ⚠️ 对话任务**必须先点任务卡「去完成」再发消息**才计数；平时直接聊天不归属活动。抽奖/对话/召唤/浏览都靠同一个活动 iframe；任一已启用任务未完成时脚本报 `status=partial`（不再被“签到成功”掩盖）。
 
 5. 所有点击/输入都通过 CDP 的 `Input.dispatchMouseEvent` / `Input.insertText` / `Input.dispatchKeyEvent` 派发**真实事件**，与参考项目一致（前端框架对 DOM 合成事件不响应）。
 
@@ -133,7 +133,7 @@ install-schedule.bat 10:10
 1. **端口 9222 打不开 / 连到别的应用**：9222 常被其它 Electron 应用（如 Lenovo Vantage）占用。本脚本默认用 **9333**，且会校验端口是否属于库库AI（User-Agent 含 `KuKuGenFlow`），被占用时自动改用备用端口。
 2. **`--force` 等待调试端口超时**：Electron 单实例锁竞态。标准解法是先彻底关闭再带端口重启——`run-once.bat` / `scheduled-run.bat` 已内置该流程。
 3. **`status=not_logged_in`**：库库AI 未登录，需先在客户端手动登录一次（登录态会持久化，之后脚本复用）。
-4. **`status=activity_not_found` / `checkin=no_sign_control`**：多为界面改版或活动入口变化（活动是 `kuku.baidu.com/comps/view` iframe，需点账户菜单「签到领奖」打开）。看 `[RESULT]` 输出与 `logs\checkin.log`，并人工在库库AI 里确认活动页能否打开。
+4. **`status=activity_not_found` / `checkin=no_sign_control`**：多为界面改版或活动入口变化（1.6.30 入口是**首页右上角活动浮标 `.activity-banner`**；旧版是账户菜单「签到领奖」）。看 `[RESULT]` 输出与 `logs\checkin.log`，并人工在库库AI 里确认活动页能否打开。
 5. **`.bat` 乱码 / 命令报错**：所有 `.bat` 为 ASCII + CRLF（无 BOM）。含中文的 `.bat` 在中文 Windows（GBK 代码页）会被误解析，故提示语一律用英文。
 
 ---
@@ -151,7 +151,7 @@ install-schedule.bat 10:10
 ## 安全与限制
 
 - 调试端口只监听 `127.0.0.1`，本机安全；但本机任意进程都能连接，公用电脑不建议长期开启。
-- CSS 类名 / 菜单文案可能随库库AI 更新变化，脚本用"活动 iframe + 类名（`kuku-sign-in__btn` / `kuku-task-card__btn` / `kuku-reward-btn`）+ 文本语义"多重定位抗改版；但活动是季节性的，改版后可能失效，看日志状态人工确认。
+- CSS 类名 / 菜单文案 / 活动入口可能随库库AI 更新变化（2026-10-26 已遇 1.6.30 改版：入口从账户菜单改为首页活动浮标），脚本用“活动 iframe URL + 类名（`pc-sign-btn` / `pc-kuku-task-card__btn` / `pc-prize-*`）+ 文本语义”多重定位抗改版；但活动是季节性的，改版后可能失效，看日志状态人工确认。
 - 对话任务会真实发消息（默认 3 次，`--chat-times` 可调，`--skip-chat` 跳过）。
 
 ---
