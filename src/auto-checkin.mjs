@@ -519,6 +519,18 @@ async function doSummon(cdp, port, message) {
   return r.status === 'sent' ? 'summoned_chat' : ('summon_' + r.status);
 }
 
+// 活动页是远程页面，iframe target 出现不代表内容已渲染；等任务卡/签到按钮真存在再操作，
+// 否则会出现 browse:no_card / lottery:no_entry 这类假失败（定位到空 DOM）。
+async function waitActivityReady(ac, timeoutMs = 12000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ok = await ac.eval(`!!document.querySelector('.pc-kuku-task-card, .pc-sign-btn')`).catch(() => false);
+    if (ok === true) return true;
+    await sleep(500);
+  }
+  return false;
+}
+
 // 打开活动页：活动已在则复用；否则回到 new-task 首页点活动浮标（.activity-banner）并附着 iframe。
 async function openActivity(cdp, port) {
   const existing = await attachComps(port, 800);   // 已打开则直接复用
@@ -526,6 +538,7 @@ async function openActivity(cdp, port) {
     // 清掉可能残留的抽奖弹窗（否则会盖住任务卡，点击不生效）
     await existing.eval(`(() => {const x=document.querySelector('.pc-prize-close');if(x)x.click();})()`).catch(() => {});
     await existing.eval('window.scrollTo(0,0)').catch(() => {});
+    await waitActivityReady(existing);
     return existing;
   }
   await dismissBlockers(cdp);
@@ -538,7 +551,7 @@ async function openActivity(cdp, port) {
   for (let attempt = 0; attempt < 3; attempt++) {
     for (let i = 0; i < 12; i++) { if (await clickActivityBanner(cdp)) break; await sleep(500); }
     const ac = await attachComps(port, 10000);
-    if (ac) return ac;
+    if (ac) { await waitActivityReady(ac); return ac; }
     await sleep(1000);
   }
   return null;
